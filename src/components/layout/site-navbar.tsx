@@ -15,14 +15,14 @@ import {
   Compass,
   ClipboardList,
   HelpCircle,
-  Languages,
-  Check,
   Plus,
 } from "lucide-react";
 import { useTheme } from "next-themes";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useAuth, ROLE_DASHBOARDS } from "@/lib/auth-context";
-import { useLang, LANGUAGES, type LangCode } from "@/lib/lang-context";
+import { useLang } from "@/lib/lang-context";
+import { LanguageSwitcher } from "@/components/ui/language-switcher";
 
 export default function SiteNavbar() {
   const { theme, setTheme } = useTheme();
@@ -34,7 +34,6 @@ export default function SiteNavbar() {
   const [scrolled, setScrolled] = useState(false);
   const [hidden, setHidden] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [langOpen, setLangOpen] = useState(false);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -121,83 +120,48 @@ export default function SiteNavbar() {
         {/* === RIGHT: Actions === */}
         <div className="flex shrink-0 items-center gap-1.5">
           {/* Language switcher */}
-          <div className="relative">
-            <button
-              onClick={() => setLangOpen((v) => !v)}
-              className="btn-ghost flex h-9 items-center gap-1 rounded-lg px-2"
-              aria-label="Change language"
-              aria-expanded={langOpen}
-            >
-              <Languages className="h-4 w-4" />
-              <span className="hidden text-[0.65rem] font-bold uppercase sm:inline">{lang}</span>
-            </button>
-            <AnimatePresence>
-              {langOpen && (
-                <>
-                  <div className="fixed inset-0 z-40" onClick={() => setLangOpen(false)} />
-                  <motion.div
-                    initial={{ opacity: 0, y: 8, scale: 0.96 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 8, scale: 0.96 }}
-                    transition={{ duration: 0.18 }}
-                    className="absolute right-0 top-11 z-50 w-44 overflow-hidden rounded-xl border border-border bg-card p-1 shadow-2xl"
-                  >
-                    {LANGUAGES.map((l) => (
-                      <button
-                        key={l.code}
-                        onClick={() => { setLang(l.code as LangCode); setLangOpen(false); }}
-                        className={cn(
-                          "flex w-full items-center justify-between rounded-lg px-3 py-2 text-sm transition-colors hover:bg-foreground/5",
-                          lang === l.code && "bg-foreground/5"
-                        )}
-                      >
-                        <span className="font-medium">{l.native}</span>
-                        {lang === l.code && <Check className="h-3.5 w-3.5 text-medical" />}
-                      </button>
-                    ))}
-                  </motion.div>
-                </>
-              )}
-            </AnimatePresence>
-          </div>
+          <LanguageSwitcher />
 
           {/* Theme toggle */}
-          <button
+          <Button
+            variant="ghost"
+            size="icon"
             onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
-            className="btn-ghost grid h-9 w-9 place-items-center rounded-lg"
             aria-label="Toggle theme"
           >
             {mounted && theme === "dark" ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
-          </button>
+          </Button>
 
           {/* Auth CTA — gated on mounted to avoid hydration mismatch */}
           {!mounted ? (
             <span className="hidden h-9 w-24 rounded-lg md:inline-block" />
           ) : user ? (
-            <button
+            <Button
+              variant="outline"
               onClick={() => router.push(ROLE_DASHBOARDS[user.role])}
-              className="btn-glass hidden items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-semibold md:flex"
+              className="hidden items-center gap-2 rounded-lg px-3 py-1.5 font-semibold md:flex"
             >
               <span className="grid h-6 w-6 place-items-center rounded-full bg-gradient-to-br from-medical to-cyan-400 text-[0.6rem] font-bold text-white">
                 {user.name.split(" ").map((n) => n[0]).slice(0, 2).join("")}
               </span>
               {t("nav.dashboard")}
-            </button>
+            </Button>
           ) : (
-            <Link href="/sign-in" className="btn-glass hidden rounded-lg px-4 py-2 text-sm font-semibold md:inline-flex">
-              {t("nav.signin")}
-            </Link>
+            <Button variant="outline" asChild className="hidden rounded-lg px-4 py-2 font-semibold md:inline-flex">
+              <Link href="/sign-in">{t("nav.signin")}</Link>
+            </Button>
           )}
 
           {/* Hamburger */}
-          <button
+          <Button
+            variant="outline"
+            size="icon"
             onClick={() => setMobileOpen((v) => !v)}
-            className="btn-glass grid h-9 w-9 place-items-center rounded-lg"
             aria-label="Open menu"
             aria-expanded={mobileOpen}
           >
             {mobileOpen ? <X className="h-4 w-4" /> : <Menu className="h-4 w-4" />}
-          </button>
+          </Button>
         </div>
       </nav>
 
@@ -223,26 +187,8 @@ export default function SiteNavbar() {
               </div>
               <div className="my-2 hairline" />
               {/* Language switcher in dropdown */}
-              <div className="mb-2">
-                <div className="flex items-center gap-2 px-3 py-1.5 text-[0.65rem] font-semibold uppercase tracking-wider text-muted-foreground">
-                  <Languages className="h-3 w-3" />
-                  Language
-                </div>
-                <div className="grid grid-cols-2 gap-1">
-                  {LANGUAGES.map((l) => (
-                    <button
-                      key={l.code}
-                      onClick={() => { setLang(l.code as LangCode); }}
-                      className={cn(
-                        "flex items-center justify-between rounded-lg px-3 py-2 text-xs font-medium transition-colors hover:bg-foreground/5",
-                        lang === l.code ? "bg-medical/10 text-medical" : "text-foreground/80"
-                      )}
-                    >
-                      {l.native}
-                      {lang === l.code && <Check className="h-3 w-3" />}
-                    </button>
-                  ))}
-                </div>
+              <div className="mb-2 px-3 py-1.5">
+                <LanguageSwitcher variant="sm" />
               </div>
               <div className="my-2 hairline" />
               {user ? (
@@ -256,19 +202,23 @@ export default function SiteNavbar() {
                       <div className="truncate text-xs text-muted-foreground">{user.email}</div>
                     </div>
                   </div>
-                  <button onClick={() => { signOut(); setMobileOpen(false); router.push("/"); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-rose-500 transition-colors hover:bg-rose-500/10">
+                  <Button variant="ghost" onClick={() => { signOut(); setMobileOpen(false); router.push("/"); }} className="w-full justify-start gap-3 rounded-xl px-3 py-3 text-sm text-rose-500 hover:bg-rose-500/10">
                     <LogOut className="h-4 w-4" />
                     {t("nav.signout")}
-                  </button>
+                  </Button>
                 </div>
               ) : (
                 <div className="grid gap-2">
-                  <Link href="/sign-in" onClick={() => setMobileOpen(false)} className="btn-glass flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold">
-                    {t("nav.signin")}
-                  </Link>
-                  <Link href="/sign-up" onClick={() => setMobileOpen(false)} className="btn-primary flex items-center justify-center gap-2 rounded-xl px-4 py-3 text-sm font-semibold">
-                    {t("nav.getstarted")}
-                  </Link>
+                  <Button variant="outline" asChild className="flex items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold">
+                    <Link href="/sign-in" onClick={() => setMobileOpen(false)}>
+                      {t("nav.signin")}
+                    </Link>
+                  </Button>
+                  <Button variant="default" asChild className="flex items-center justify-center gap-2 rounded-xl px-4 py-3 font-semibold">
+                    <Link href="/sign-up" onClick={() => setMobileOpen(false)}>
+                      {t("nav.getstarted")}
+                    </Link>
+                  </Button>
                 </div>
               )}
             </motion.div>

@@ -26,6 +26,7 @@ import SiteFooter from "@/components/layout/site-footer";
 import { MEDICINES, FACILITIES, type Medicine } from "@/lib/data";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { Button } from "@/components/ui/button";
 
 const EASE = [0.16, 1, 0.3, 1] as const;
 
@@ -119,13 +120,15 @@ function ExploreContent() {
               autoFocus
             />
             {query && (
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => setQuery("")}
-                className="btn-ghost grid h-6 w-6 place-items-center rounded-md"
+                className="h-6 w-6 rounded-md"
                 aria-label="Clear search"
               >
                 <X className="h-3.5 w-3.5" />
-              </button>
+              </Button>
             )}
           </div>
 
@@ -139,19 +142,20 @@ function ExploreContent() {
                 { id: "pharmacy", label: "Pharmacies", icon: Pill },
               ] as const
             ).map((t) => (
-              <button
+              <Button
                 key={t.id}
+                variant="outline"
                 onClick={() => setTab(t.id)}
                 className={cn(
-                  "flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
+                  "flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold",
                   tab === t.id
-                    ? "bg-medical text-white"
+                    ? "bg-medical text-white border-medical"
                     : "bg-card/60 text-muted-foreground hover:text-foreground"
                 )}
               >
                 <t.icon className="h-3.5 w-3.5" />
                 {t.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
@@ -176,18 +180,20 @@ function ExploreContent() {
                       { id: "stock", label: "In stock" },
                     ] as const
                   ).map((s) => (
-                    <button
+                    <Button
                       key={s.id}
+                      variant="ghost"
+                      size="sm"
                       onClick={() => setSort(s.id)}
                       className={cn(
-                        "rounded-md px-2 py-1 font-semibold transition-colors",
+                        "rounded-md px-2 py-1 text-xs font-semibold",
                         sort === s.id
                           ? "bg-medical/12 text-medical"
                           : "text-muted-foreground hover:text-foreground"
                       )}
                     >
                       {s.label}
-                    </button>
+                    </Button>
                   ))}
                 </div>
               )}
@@ -443,13 +449,15 @@ function ExploreContent() {
                   {selectedMed.pack}
                 </p>
               </div>
-              <button
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => setSelectedMed(null)}
-                className="btn-ghost grid h-8 w-8 place-items-center rounded-lg"
+                className="h-8 w-8 rounded-lg"
                 aria-label="Close"
               >
                 <X className="h-4 w-4" />
-              </button>
+              </Button>
             </div>
 
             <div className="mt-3 flex flex-wrap gap-2">
@@ -529,7 +537,7 @@ function ExploreContent() {
                           {p.distanceKm} km
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
+                          <Button
                             disabled={!p.inStock}
                             onClick={() => {
                               toast.success(
@@ -537,15 +545,14 @@ function ExploreContent() {
                               );
                               setSelectedMed(null);
                             }}
+                            variant={p.inStock ? "default" : "outline"}
                             className={cn(
                               "rounded-lg px-3 py-1.5 text-xs font-semibold transition-all",
-                              p.inStock
-                                ? "btn-primary"
-                                : "cursor-not-allowed bg-muted text-muted-foreground"
+                              !p.inStock && "cursor-not-allowed bg-muted text-muted-foreground"
                             )}
                           >
                             {p.inStock ? "Order" : "Out"}
-                          </button>
+                          </Button>
                         </td>
                       </tr>
                     ))}
@@ -560,13 +567,12 @@ function ExploreContent() {
               e-prescriptions are sent automatically.
             </div>
 
-            <Link
-              href="/sign-up?role=patient"
-              className="btn-secondary mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 text-sm font-semibold"
-            >
-              Sign up to order & track deliveries
-              <ArrowRight className="h-4 w-4" />
-            </Link>
+            <Button variant="secondary" asChild className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl py-2.5 font-semibold">
+              <Link href="/sign-up?role=patient">
+                Sign up to order & track deliveries
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
           </motion.div>
         </div>
       )}

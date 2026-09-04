@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/theme-provider";
+import SessionProvider from "@/components/session-provider";
 import { AuthProvider } from "@/lib/auth-context";
 import { LanguageProvider } from "@/lib/lang-context";
 import { SecurityProvider } from "@/components/security-provider";
@@ -74,6 +75,7 @@ export default function RootLayout({
           enableSystem
           disableTransitionOnChange
         >
+        <SessionProvider>
           <AuthProvider>
             <LanguageProvider>
               <SecurityProvider>
@@ -82,6 +84,7 @@ export default function RootLayout({
               </SecurityProvider>
             </LanguageProvider>
           </AuthProvider>
+        </SessionProvider>
         </ThemeProvider>
       </body>
     </html>

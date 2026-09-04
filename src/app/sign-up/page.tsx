@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useAuth, ROLE_DASHBOARDS, type UserRole } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
 
 const ROLES: Array<{
   id: UserRole;
@@ -46,7 +47,7 @@ function SignUpForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     if (password.length < 8) {
@@ -54,15 +55,14 @@ function SignUpForm() {
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      const res = signUp({ name, email, password, role });
-      setLoading(false);
-      if (!res.ok) {
-        setError(res.error ?? "Sign up failed.");
-        return;
-      }
-      router.push(ROLE_DASHBOARDS[role]);
-    }, 400);
+    const res = await signUp({ name, email, password, role });
+    setLoading(false);
+    if (!res.ok) {
+      setError(res.error ?? "Sign up failed.");
+      return;
+    }
+    // Account created — redirect to sign-in
+    router.push("/sign-in?registered=true");
   };
 
   return (
@@ -164,12 +164,13 @@ function SignUpForm() {
             </label>
             <div className="grid grid-cols-2 gap-2">
               {ROLES.map((r) => (
-                <button
+                <Button
                   key={r.id}
                   type="button"
+                  variant="outline"
                   onClick={() => setRole(r.id)}
                   className={cn(
-                    "flex items-center gap-2.5 rounded-xl border p-3 text-left transition-all",
+                    "flex h-auto items-center gap-2.5 p-3 text-left",
                     role === r.id
                       ? "border-medical bg-medical/10 ring-1 ring-medical/30"
                       : "border-border bg-card/40 hover:border-medical/40"
@@ -191,7 +192,7 @@ function SignUpForm() {
                       {r.desc}
                     </div>
                   </div>
-                </button>
+                </Button>
               ))}
             </div>
           </div>
@@ -254,14 +255,15 @@ function SignUpForm() {
               </div>
             </div>
 
-            <button
+            <Button
               type="submit"
               disabled={loading}
-              className="btn-primary flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold disabled:opacity-60"
+              variant="default"
+              className="flex h-11 w-full items-center justify-center gap-2 rounded-xl font-semibold disabled:opacity-60"
             >
               {loading ? "Creating account…" : "Create account"}
               {!loading && <ArrowRight className="h-4 w-4" />}
-            </button>
+            </Button>
           </form>
 
           <p className="mt-8 text-center text-sm text-muted-foreground">

@@ -1,11 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { motion, useScroll, useTransform } from "framer-motion";
 import { ArrowDown, Sparkles } from "lucide-react";
 import Link from "next/link";
 import { useAuth, ROLE_DASHBOARDS } from "@/lib/auth-context";
 import { useLang } from "@/lib/lang-context";
+import { Button } from "@/components/ui/button";
+
+const HeartModel = dynamic(() => import("@/components/three/heart-model"), {
+  ssr: false,
+  loading: () => null,
+});
+
+const ease = [0.16, 1, 0.3, 1] as [number, number, number, number];
 
 const wordVariants = {
   hidden: { yPercent: 120, opacity: 0, filter: "blur(10px)" },
@@ -13,7 +22,7 @@ const wordVariants = {
     yPercent: 0,
     opacity: 1,
     filter: "blur(0px)",
-    transition: { duration: 1.2, ease: [0.16, 1, 0.3, 1], delay: 0.5 + i * 0.1 },
+    transition: { duration: 1.2, ease, delay: 0.5 + i * 0.1 },
   }),
 };
 
@@ -22,7 +31,7 @@ const fadeVariants = {
   visible: (i: number) => ({
     y: 0,
     opacity: 1,
-    transition: { duration: 1, ease: [0.16, 1, 0.3, 1], delay: 1.1 + i * 0.15 },
+    transition: { duration: 1, ease, delay: 1.1 + i * 0.15 },
   }),
 };
 
@@ -72,6 +81,14 @@ export default function HeroSection() {
               "radial-gradient(ellipse at 65% 50%, color-mix(in oklab, var(--medical) 12%, transparent) 0%, transparent 60%)",
           }}
         />
+
+        {/* === 3D Heart Model — right side === */}
+        <div className="pointer-events-none absolute inset-0 z-10">
+          <HeartModel
+            scrollProgress={progress}
+            className="absolute right-0 top-0 h-full w-full"
+          />
+        </div>
 
         {/* === Minimal text overlay — bottom-left === */}
         <motion.div
@@ -132,17 +149,23 @@ export default function HeroSection() {
               className="pointer-events-auto mt-5"
             >
               {mounted && user ? (
-                <Link href={ROLE_DASHBOARDS[user.role]} className="btn-primary inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold sm:px-6 sm:py-3 sm:text-sm">
-                  {t("hero.cta3")}
-                </Link>
+                <Button variant="default" asChild className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold sm:px-6 sm:py-3 sm:text-sm">
+                  <Link href={ROLE_DASHBOARDS[user.role]}>
+                    {t("hero.cta3")}
+                  </Link>
+                </Button>
               ) : (
                 <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-                  <Link href="/sign-up" className="btn-primary inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold sm:px-6 sm:py-3 sm:text-sm">
-                    {t("hero.cta1")}
-                  </Link>
-                  <Link href="/sign-in" className="btn-glass inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold sm:px-6 sm:py-3 sm:text-sm">
-                    {t("hero.cta2")}
-                  </Link>
+                  <Button variant="default" asChild className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold sm:px-6 sm:py-3 sm:text-sm">
+                    <Link href="/sign-up">
+                      {t("hero.cta1")}
+                    </Link>
+                  </Button>
+                  <Button variant="outline" asChild className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-xs font-semibold sm:px-6 sm:py-3 sm:text-sm">
+                    <Link href="/sign-in">
+                      {t("hero.cta2")}
+                    </Link>
+                  </Button>
                 </div>
               )}
             </motion.div>

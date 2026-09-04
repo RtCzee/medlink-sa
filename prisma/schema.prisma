@@ -1,32 +1,289 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
-
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// ─── Enums ────────────────────────────────────────────────
+
+enum UserRole {
+  patient
+  doctor
+  hospital
+  pharmacy
+  admin
 }
 
-model Post {
+enum EquipmentStatus {
+  operational
+  maintenance
+  decommissioned
+}
+
+enum AppointmentStatus {
+  scheduled
+  confirmed
+  completed
+  cancelled
+  no_show
+}
+
+enum OrderStatus {
+  pending
+  confirmed
+  dispensing
+  ready
+  delivered
+  cancelled
+}
+
+// ─── Core ─────────────────────────────────────────────────
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String?
+  passwordHash String
+  role         UserRole
+  avatar       String?
+  verified     Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  doctorProfile   DoctorProfile?
+  patientProfile  PatientProfile?
+  hospitalAdmin   HospitalAdmin?
+  staffMember     StaffMember?
+  pharmacist      Pharmacist?
+
+  // Relations as patient
+  patientAppointments  Appointment[]  @relation("PatientAppointments")
+  patientPrescriptions Prescription[] @relation("PatientPrescriptions")
+  patientHealthRecords HealthRecord[] @relation("PatientHealthRecords")
+  patientOrders        Order[]        @relation("PatientOrders")
+
+  // Relations as doctor
+  doctorAppointments  Appointment[]  @relation("DoctorAppointments")
+  doctorPrescriptions Prescription[] @relation("DoctorPrescriptions")
+  doctorHealthRecords HealthRecord[] @relation("DoctorHealthRecords")
+
+  @@index([role])
+}
+
+// ─── Doctor ───────────────────────────────────────────────
+
+model DoctorProfile {
+  id            String  @id @default(cuid())
+  userId        String  @unique
+  specialty     String
+  licenseNumber String  @unique
+  facility      String?
+  bio           String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Patient ──────────────────────────────────────────────
+
+model PatientProfile {
+  id              String  @id @default(cuid())
+  userId          String  @unique
+  dateOfBirth     DateTime?
+  gender          String?
+  idNumber        String? @unique
+  medicalAid      String?
+  emergencyContact String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ─── Hospital ─────────────────────────────────────────────
+
+model Hospital {
   id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
+  name      String
+  address   String?
+  city      String?
+  province  String?
+  phone     String?
+  email     String?
+  website   String?
+  logo      String?
+  bedCount  Int?
+  verified  Boolean  @default(false)
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+
+  admins     HospitalAdmin[]
+  wards      Ward[]
+  staff      StaffMember[]
+  equipment  Equipment[]
+  appointments Appointment[]
+}
+
+model HospitalAdmin {
+  id         String  @id @default(cuid())
+  userId     String  @unique
+  hospitalId String
+  position   String?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hospital Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+}
+
+model Ward {
+  id         String @id @default(cuid())
+  hospitalId String
+  name       String
+  capacity   Int?
+  department String?
+
+  hospital Hospital      @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  staff    StaffMember[]
+}
+
+model StaffMember {
+  id         String  @id @default(cuid())
+  userId     String  @unique
+  hospitalId String
+  wardId     String?
+  position   String?
+  shift      String?
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hospital Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+  ward     Ward?    @relation(fields: [wardId], references: [id], onDelete: SetNull)
+}
+
+model Equipment {
+  id              String          @id @default(cuid())
+  hospitalId      String
+  name            String
+  model           String?
+  status          EquipmentStatus @default(operational)
+  lastMaintenance DateTime?
+  nextMaintenance DateTime?
+
+  hospital Hospital @relation(fields: [hospitalId], references: [id], onDelete: Cascade)
+}
+
+// ─── Pharmacy ─────────────────────────────────────────────
+
+model Pharmacist {
+  id           String  @id @default(cuid())
+  userId       String  @unique
+  licenseNumber String @unique
+  pharmacyName String?
+  address      String?
+  phone        String?
+
+  user   User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  prices MedicinePrice[]
+  orders Order[]
+}
+
+model Medicine {
+  id                    String @id @default(cuid())
+  name                  String
+  generic               String?
+  form                  String?
+  strength              String?
+  pack                  String?
+  schedule              String?
+  requiresPrescription Boolean @default(false)
+  category              String?
+
+  prices MedicinePrice[]
+}
+
+model MedicinePrice {
+  id             String  @id @default(cuid())
+  medicineId     String
+  pharmacistId   String
+  price          Decimal @db.Decimal(10, 2)
+  inStock        Boolean @default(true)
+  deliveryAvailable Boolean @default(false)
+
+  medicine   Medicine   @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+  pharmacist Pharmacist @relation(fields: [pharmacistId], references: [id], onDelete: Cascade)
+
+  @@unique([medicineId, pharmacistId])
+}
+
+// ─── Appointments ─────────────────────────────────────────
+
+model Appointment {
+  id          String            @id @default(cuid())
+  patientId   String
+  doctorId    String
+  hospitalId  String?
+  datetime    DateTime
+  status      AppointmentStatus @default(scheduled)
+  notes       String?
+  type        String?
+
+  patient      User          @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  doctor       User          @relation("DoctorAppointments", fields: [doctorId], references: [id], onDelete: Cascade)
+  hospital     Hospital?     @relation(fields: [hospitalId], references: [id], onDelete: SetNull)
+  prescription Prescription?
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([datetime])
+}
+
+// ─── Prescriptions ────────────────────────────────────────
+
+model Prescription {
+  id            String   @id @default(cuid())
+  appointmentId String   @unique
+  doctorId      String
+  patientId     String
+  items         Json
+  notes         String?
+  dispensed     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  appointment Appointment @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  doctor      User        @relation("DoctorPrescriptions", fields: [doctorId], references: [id], onDelete: Cascade)
+  patient     User        @relation("PatientPrescriptions", fields: [patientId], references: [id], onDelete: Cascade)
+}
+
+// ─── Health Records ───────────────────────────────────────
+
+model HealthRecord {
+  id          String   @id @default(cuid())
+  patientId   String
+  doctorId    String?
+  type        String
+  title       String
+  content     String?
+  attachments Json?
+  createdAt   DateTime @default(now())
+
+  patient User?  @relation("PatientHealthRecords", fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  User?  @relation("DoctorHealthRecords", fields: [doctorId], references: [id], onDelete: SetNull)
+
+  @@index([patientId])
+}
+
+// ─── Orders ───────────────────────────────────────────────
+
+model Order {
+  id              String      @id @default(cuid())
+  patientId       String
+  pharmacistId    String?
+  items           Json
+  status          OrderStatus @default(pending)
+  total           Decimal     @db.Decimal(10, 2)
+  deliveryAddress String?
+  createdAt       DateTime    @default(now())
+
+  patient    User        @relation("PatientOrders", fields: [patientId], references: [id], onDelete: Cascade)
+  pharmacist Pharmacist? @relation(fields: [pharmacistId], references: [id], onDelete: SetNull)
+
+  @@index([patientId])
+  @@index([status])
 }

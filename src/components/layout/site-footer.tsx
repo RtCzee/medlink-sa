@@ -13,6 +13,7 @@ import {
   ShieldCheck,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { Button } from "@/components/ui/button";
 
 const COLUMNS = [
   {
@@ -83,19 +84,17 @@ export default function SiteFooter() {
             </p>
           </div>
           <div className="flex flex-wrap gap-3">
-            <Link
-              href="/sign-up"
-              className="btn-primary inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold"
-            >
-              Create account
-              <ArrowUpRight className="h-4 w-4" />
-            </Link>
-            <Link
-              href="/sign-in"
-              className="btn-secondary inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-semibold"
-            >
-              Sign in
-            </Link>
+            <Button variant="default" asChild className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 font-semibold">
+              <Link href="/sign-up">
+                Create account
+                <ArrowUpRight className="h-4 w-4" />
+              </Link>
+            </Button>
+            <Button variant="secondary" asChild className="inline-flex items-center gap-2 rounded-xl px-5 py-2.5 font-semibold">
+              <Link href="/sign-in">
+                Sign in
+              </Link>
+            </Button>
           </div>
         </motion.div>
 
