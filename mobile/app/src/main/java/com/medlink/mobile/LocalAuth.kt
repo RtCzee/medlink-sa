@@ -10,6 +10,10 @@ import androidx.room.PrimaryKey
 import androidx.room.Query
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.ColumnInfo
+import androidx.room.Update
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 import java.security.MessageDigest
 import java.security.SecureRandom
 import javax.crypto.SecretKeyFactory
@@ -21,6 +25,12 @@ data class LocalAccount(
     val name: String,
     val passwordSalt: String,
     val passwordHash: String,
+    @ColumnInfo(defaultValue = "''") val phone: String = "",
+    @ColumnInfo(defaultValue = "''") val bloodType: String = "",
+    @ColumnInfo(defaultValue = "''") val allergies: String = "",
+    @ColumnInfo(defaultValue = "''") val conditions: String = "",
+    @ColumnInfo(defaultValue = "''") val emergencyContactName: String = "",
+    @ColumnInfo(defaultValue = "''") val emergencyContactPhone: String = "",
 )
 
 @Dao
@@ -30,13 +40,27 @@ interface LocalAccountDao {
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(account: LocalAccount)
+
+    @Update
+    suspend fun update(account: LocalAccount)
 }
 
-@Database(entities = [LocalAccount::class], version = 1, exportSchema = false)
+@Database(entities = [LocalAccount::class], version = 2, exportSchema = false)
 abstract class MedLinkDatabase : RoomDatabase() {
     abstract fun localAccountDao(): LocalAccountDao
 
     companion object {
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE local_accounts ADD COLUMN phone TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE local_accounts ADD COLUMN bloodType TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE local_accounts ADD COLUMN allergies TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE local_accounts ADD COLUMN conditions TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE local_accounts ADD COLUMN emergencyContactName TEXT NOT NULL DEFAULT ''")
+                database.execSQL("ALTER TABLE local_accounts ADD COLUMN emergencyContactPhone TEXT NOT NULL DEFAULT ''")
+            }
+        }
+
         @Volatile
         private var instance: MedLinkDatabase? = null
 
@@ -46,13 +70,13 @@ abstract class MedLinkDatabase : RoomDatabase() {
                     context.applicationContext,
                     MedLinkDatabase::class.java,
                     "medlink-local.db",
-                ).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
             }
     }
 }
 
 sealed interface LocalAuthResult {
-    data class Success(val name: String, val email: String) : LocalAuthResult
+    data class Success(val account: LocalAccount) : LocalAuthResult
     data object InvalidCredentials : LocalAuthResult
     data object AccountAlreadyExists : LocalAuthResult
 }
@@ -76,7 +100,7 @@ class LocalAuthRepository(private val accounts: LocalAccountDao) {
             hash.fill(0)
         }
         accounts.insert(account)
-        return LocalAuthResult.Success(account.name, account.email)
+        return LocalAuthResult.Success(account)
     }
 
     suspend fun signIn(email: String, password: String): LocalAuthResult {
@@ -86,13 +110,17 @@ class LocalAuthRepository(private val accounts: LocalAccountDao) {
         val actualHash = derivePasswordHash(password.toCharArray(), salt)
         return try {
             if (MessageDigest.isEqual(expectedHash, actualHash)) {
-                LocalAuthResult.Success(account.name, account.email)
+                LocalAuthResult.Success(account)
             } else {
                 LocalAuthResult.InvalidCredentials
             }
         } finally {
             actualHash.fill(0)
         }
+    }
+
+    suspend fun saveProfile(account: LocalAccount) {
+        accounts.update(account)
     }
 
     private fun derivePasswordHash(password: CharArray, salt: ByteArray): ByteArray {

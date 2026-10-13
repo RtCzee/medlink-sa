@@ -114,11 +114,9 @@ private fun MedLinkApp() {
     val authRepository = remember(context) {
         LocalAuthRepository(MedLinkDatabase.getInstance(context).localAccountDao())
     }
-    var signedIn by rememberSaveable { mutableStateOf(false) }
+    var currentAccount by remember { mutableStateOf<LocalAccount?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var emergencyPage by rememberSaveable { mutableIntStateOf(0) }
-    var patientName by rememberSaveable { mutableStateOf("Aisha Patel") }
-    var patientEmail by rememberSaveable { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
 
     MaterialTheme(
@@ -132,13 +130,12 @@ private fun MedLinkApp() {
         ),
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
-            if (!signedIn) {
-                SignInScreen(authRepository, onSignedIn = { name, email ->
-                    patientName = name
-                    patientEmail = email
-                    signedIn = true
+            if (currentAccount == null) {
+                SignInScreen(authRepository, onSignedIn = { account ->
+                    currentAccount = account
                 })
             } else {
+                val account = currentAccount!!
                 Scaffold(
                     containerColor = Canvas,
                     bottomBar = {
@@ -170,17 +167,17 @@ private fun MedLinkApp() {
                             .verticalScroll(rememberScrollState()),
                     ) {
                         when (selectedTab) {
-                            0 -> HomeScreen(patientName, onNavigate = { selectedTab = it })
+                                0 -> HomeScreen(account.name, onNavigate = { selectedTab = it })
                             1 -> QueueScreen(onMessage = { message = it })
-                            2 -> EmergencyScreen(patientName, emergencyPage) { emergencyPage = it }
+                                2 -> EmergencyScreen(account, emergencyPage) { emergencyPage = it }
                             3 -> CareScreen(onMessage = { message = it })
                             4 -> RecordsScreen()
                             else -> ProfileScreen(
-                                patientName,
-                                patientEmail,
-                                onNameChange = { patientName = it },
+                                    account,
+                                    authRepository,
+                                    onAccountSaved = { currentAccount = it },
                                 onSignOut = {
-                                    signedIn = false
+                                        currentAccount = null
                                     selectedTab = 0
                                 },
                             )
@@ -206,7 +203,7 @@ private fun MedLinkApp() {
 @Composable
 private fun SignInScreen(
     authRepository: LocalAuthRepository,
-    onSignedIn: (String, String) -> Unit,
+    onSignedIn: (LocalAccount) -> Unit,
 ) {
     val coroutineScope = rememberCoroutineScope()
     var createAccount by rememberSaveable { mutableStateOf(false) }
@@ -291,7 +288,7 @@ private fun SignInScreen(
                                 is LocalAuthResult.Success -> {
                                     password = ""
                                     confirmPassword = ""
-                                    onSignedIn(result.name, result.email)
+                                    onSignedIn(result.account)
                                 }
                                 LocalAuthResult.InvalidCredentials ->
                                     errorMessage = "Email or password is incorrect."
@@ -397,7 +394,7 @@ private fun HomeScreen(name: String, onNavigate: (Int) -> Unit) {
 }
 
 @Composable
-private fun EmergencyScreen(name: String, page: Int, onPageChange: (Int) -> Unit) {
+private fun EmergencyScreen(account: LocalAccount, page: Int, onPageChange: (Int) -> Unit) {
     val context = LocalContext.current
     var horizontalDrag by remember { mutableStateOf(0f) }
     Column(
@@ -417,7 +414,7 @@ private fun EmergencyScreen(name: String, page: Int, onPageChange: (Int) -> Unit
     ) {
         ScreenTitle("Emergency assistance", "Your critical details and help, ready when you need them.")
         if (page == 0) {
-            EmergencyQrCard(name)
+            EmergencyQrCard(account)
             Spacer(Modifier.height(14.dp))
             Text(
                 "Show this code to a paramedic. Swipe left for ambulance and nearby hospitals.",
@@ -456,10 +453,23 @@ private fun EmergencyScreen(name: String, page: Int, onPageChange: (Int) -> Unit
 }
 
 @Composable
-private fun EmergencyQrCard(name: String) {
-    val qrData = remember(name) {
+private fun EmergencyQrCard(account: LocalAccount) {
+    val qrContent = remember(account) {
+        listOf(
+            "MEDLINK SA EMERGENCY PROFILE",
+            "Name: ${account.name}",
+            "Email: ${account.email}",
+            "Phone: ${account.phone.ifBlank { "Not provided" }}",
+            "Blood type: ${account.bloodType.ifBlank { "Not provided" }}",
+            "Allergies: ${account.allergies.ifBlank { "Not provided" }}",
+            "Conditions: ${account.conditions.ifBlank { "Not provided" }}",
+            "Emergency contact: ${account.emergencyContactName.ifBlank { "Not provided" }}",
+            "Emergency contact phone: ${account.emergencyContactPhone.ifBlank { "Not provided" }}",
+        ).joinToString("\n")
+    }
+    val qrData = remember(qrContent) {
         QRCodeWriter().encode(
-            "MEDLINK SA EMERGENCY PROFILE\nName: $name\nBlood type: Not provided\nAllergies: Not provided\nEmergency contact: Not provided",
+            qrContent,
             BarcodeFormat.QR_CODE,
             256,
             256,
@@ -495,9 +505,9 @@ private fun EmergencyQrCard(name: String) {
                 }
             }
             Spacer(Modifier.height(12.dp))
-            Text(name, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Text(account.name, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
             Spacer(Modifier.height(4.dp))
-            Text("Blood type, allergies and contact: not added", color = Muted, fontSize = 11.sp)
+            Text("Name and email included · add details in Profile settings", color = Muted, fontSize = 11.sp)
             Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Mint).padding(12.dp),
@@ -505,7 +515,7 @@ private fun EmergencyQrCard(name: String) {
             ) {
                 Icon(Icons.Default.Security, contentDescription = null, tint = Teal, modifier = Modifier.size(19.dp))
                 Spacer(Modifier.width(9.dp))
-                Text("Demo QR only. Add verified medical details before relying on this ID.", color = Ink, fontSize = 11.sp)
+                Text("Anyone who scans this QR can read the medical details you add.", color = Ink, fontSize = 11.sp)
             }
         }
     }
@@ -775,24 +785,134 @@ private fun RecordsScreen() {
 
 @Composable
 private fun ProfileScreen(
-    name: String,
-    initialEmail: String,
-    onNameChange: (String) -> Unit,
+    account: LocalAccount,
+    authRepository: LocalAuthRepository,
+    onAccountSaved: (LocalAccount) -> Unit,
     onSignOut: () -> Unit,
 ) {
-    var email by rememberSaveable(initialEmail) { mutableStateOf(initialEmail) }
-    var phone by rememberSaveable { mutableStateOf("+27 82 555 0142") }
-    var saved by rememberSaveable { mutableStateOf(false) }
+    val coroutineScope = rememberCoroutineScope()
+    var name by rememberSaveable(account.email, account.name) { mutableStateOf(account.name) }
+    var phone by rememberSaveable(account.email, account.phone) { mutableStateOf(account.phone) }
+    var bloodType by rememberSaveable(account.email, account.bloodType) { mutableStateOf(account.bloodType) }
+    var allergies by rememberSaveable(account.email, account.allergies) { mutableStateOf(account.allergies) }
+    var conditions by rememberSaveable(account.email, account.conditions) { mutableStateOf(account.conditions) }
+    var emergencyContactName by rememberSaveable(account.email, account.emergencyContactName) { mutableStateOf(account.emergencyContactName) }
+    var emergencyContactPhone by rememberSaveable(account.email, account.emergencyContactPhone) { mutableStateOf(account.emergencyContactPhone) }
+    var isSaving by rememberSaveable { mutableStateOf(false) }
+    var statusMessage by rememberSaveable { mutableStateOf<String?>(null) }
     Column(Modifier.padding(horizontal = 20.dp)) {
-        ScreenTitle("My profile", "Your personal details and preferences.")
-        OutlinedTextField(value = name, onValueChange = { onNameChange(it); saved = false }, modifier = Modifier.fillMaxWidth(), label = { Text("Full name") }, singleLine = true)
+        ScreenTitle("Profile settings", "Manage your account and emergency medical details.")
+        OutlinedTextField(
+            value = name,
+            onValueChange = { if (it.length <= 100) name = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Full name") },
+            singleLine = true,
+        )
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(value = email, onValueChange = { email = it; saved = false }, modifier = Modifier.fillMaxWidth(), label = { Text("Email address") }, singleLine = true)
+        OutlinedTextField(
+            value = account.email,
+            onValueChange = {},
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Account email") },
+            singleLine = true,
+            readOnly = true,
+        )
         Spacer(Modifier.height(12.dp))
-        OutlinedTextField(value = phone, onValueChange = { phone = it; saved = false }, modifier = Modifier.fillMaxWidth(), label = { Text("Phone number") }, singleLine = true)
+        Text("EMERGENCY MEDICAL DETAILS", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Spacer(Modifier.height(8.dp))
+        Text("These optional details are stored on this device and included in your emergency QR.", color = Muted, fontSize = 12.sp)
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = phone,
+            onValueChange = { if (it.length <= 32) phone = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Your phone number") },
+            singleLine = true,
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = bloodType,
+            onValueChange = { if (it.length <= 20) bloodType = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Blood type (optional)") },
+            singleLine = true,
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = allergies,
+            onValueChange = { if (it.length <= 250) allergies = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Allergies (optional)") },
+            minLines = 2,
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = conditions,
+            onValueChange = { if (it.length <= 250) conditions = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Medical conditions (optional)") },
+            minLines = 2,
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = emergencyContactName,
+            onValueChange = { if (it.length <= 100) emergencyContactName = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Emergency contact name (optional)") },
+            singleLine = true,
+        )
+        Spacer(Modifier.height(12.dp))
+        OutlinedTextField(
+            value = emergencyContactPhone,
+            onValueChange = { if (it.length <= 32) emergencyContactPhone = it; statusMessage = null },
+            modifier = Modifier.fillMaxWidth(),
+            label = { Text("Emergency contact phone (optional)") },
+            singleLine = true,
+        )
         Spacer(Modifier.height(16.dp))
-        Button(onClick = { saved = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-            Text(if (saved) "Details saved on this screen" else "Save details")
+        Button(
+            onClick = {
+                if (name.isBlank()) {
+                    statusMessage = "Enter your full name."
+                } else {
+                    val updatedAccount = account.copy(
+                        name = name.trim(),
+                        phone = phone.trim(),
+                        bloodType = bloodType.trim(),
+                        allergies = allergies.trim(),
+                        conditions = conditions.trim(),
+                        emergencyContactName = emergencyContactName.trim(),
+                        emergencyContactPhone = emergencyContactPhone.trim(),
+                    )
+                    isSaving = true
+                    statusMessage = null
+                    coroutineScope.launch {
+                        try {
+                            authRepository.saveProfile(updatedAccount)
+                            onAccountSaved(updatedAccount)
+                            statusMessage = "Profile saved. Your emergency QR has been updated."
+                        } catch (exception: SQLiteException) {
+                            statusMessage = "Your profile could not be saved on this device. Please try again."
+                        } finally {
+                            isSaving = false
+                        }
+                    }
+                }
+            },
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            enabled = !isSaving,
+        ) {
+            if (isSaving) {
+                CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+            } else {
+                Text("Save profile and QR details")
+            }
+        }
+        statusMessage?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(it, color = if (it.startsWith("Profile saved")) Teal else EmergencyRed, fontSize = 12.sp)
         }
         Spacer(Modifier.height(16.dp))
         OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
