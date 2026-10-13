@@ -41,6 +41,7 @@ yarn-error.log*
 next-env.d.ts
 
 # Android / Gradle
+/mobile/MedLinkSA_Mobile_App_Features.md
 **/.gradle/
 **/.kotlin/
 **/build/

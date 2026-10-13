@@ -10,6 +10,7 @@ Open the `mobile` folder (not the repository root) in Android Studio, let Gradle
 
 - Sign-in and create-account screens
 - Patient overview with upcoming-care summary
+- Emergency QR medical ID, ambulance dialer shortcut, and demo nearby-hospital map
 - Facility selection and queue-ticket interaction
 - Appointment overview and doctor contact actions
 - Medical record list and editable profile fields

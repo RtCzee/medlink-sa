@@ -1,11 +1,17 @@
 package com.medlink.mobile
 
+import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -26,12 +32,16 @@ import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Directions
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalHospital
 import androidx.compose.material.icons.filled.MedicalInformation
+import androidx.compose.material.icons.filled.MyLocation
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Queue
 import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.filled.Security
@@ -63,11 +73,16 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.qrcode.QRCodeWriter
 
 private val Ink = Color(0xFF17333A)
 private val Muted = Color(0xFF718489)
@@ -76,6 +91,7 @@ private val Teal = Color(0xFF176B63)
 private val Mint = Color(0xFFDCEFE8)
 private val Coral = Color(0xFFE68168)
 private val Line = Color(0xFFE2EAE6)
+private val EmergencyRed = Color(0xFFB73535)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -88,6 +104,7 @@ class MainActivity : ComponentActivity() {
 private fun MedLinkApp() {
     var signedIn by rememberSaveable { mutableStateOf(false) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    var emergencyPage by rememberSaveable { mutableIntStateOf(0) }
     var patientName by rememberSaveable { mutableStateOf("Aisha Patel") }
     var message by remember { mutableStateOf<String?>(null) }
 
@@ -112,10 +129,11 @@ private fun MedLinkApp() {
                     containerColor = Canvas,
                     bottomBar = {
                         NavigationBar(containerColor = Color.White) {
-                            val tabs = listOf("Home", "Queue", "Care", "Records", "Profile")
+                            val tabs = listOf("Home", "Queue", "Emergency", "Care", "Records", "Profile")
                             val icons = listOf(
                                 Icons.Default.Home,
                                 Icons.Default.Queue,
+                                Icons.Default.QrCode2,
                                 Icons.Default.CalendarMonth,
                                 Icons.AutoMirrored.Filled.ReceiptLong,
                                 Icons.Default.Person,
@@ -140,8 +158,9 @@ private fun MedLinkApp() {
                         when (selectedTab) {
                             0 -> HomeScreen(patientName, onNavigate = { selectedTab = it })
                             1 -> QueueScreen(onMessage = { message = it })
-                            2 -> CareScreen(onMessage = { message = it })
-                            3 -> RecordsScreen()
+                            2 -> EmergencyScreen(patientName, emergencyPage) { emergencyPage = it }
+                            3 -> CareScreen(onMessage = { message = it })
+                            4 -> RecordsScreen()
                             else -> ProfileScreen(patientName) { patientName = it }
                         }
                     }
@@ -258,7 +277,7 @@ private fun HomeScreen(name: String, onNavigate: (Int) -> Unit) {
             }
         }
         Spacer(Modifier.height(23.dp))
-        SectionHeading("Next appointment", "See all") { onNavigate(2) }
+        SectionHeading("Next appointment", "See all") { onNavigate(3) }
         Spacer(Modifier.height(10.dp))
         AppointmentCard("Dr. Thandiwe Mokoena", "General Practice", "Tomorrow  ·  09:30", "Rosebank Clinic")
         Spacer(Modifier.height(22.dp))
@@ -266,17 +285,271 @@ private fun HomeScreen(name: String, onNavigate: (Int) -> Unit) {
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             QuickAction("Join a queue", Icons.Default.Queue, Modifier.weight(1f)) { onNavigate(1) }
-            QuickAction("Find a doctor", Icons.Default.LocalHospital, Modifier.weight(1f)) { onNavigate(2) }
+            QuickAction("Find a doctor", Icons.Default.LocalHospital, Modifier.weight(1f)) { onNavigate(3) }
         }
         Spacer(Modifier.height(10.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            QuickAction("Medical records", Icons.Default.MedicalInformation, Modifier.weight(1f)) { onNavigate(3) }
-            QuickAction("My profile", Icons.Default.Person, Modifier.weight(1f)) { onNavigate(4) }
+            QuickAction("Medical records", Icons.Default.MedicalInformation, Modifier.weight(1f)) { onNavigate(4) }
+            QuickAction("My profile", Icons.Default.Person, Modifier.weight(1f)) { onNavigate(5) }
         }
         Spacer(Modifier.height(20.dp))
         DemoNotice()
         Spacer(Modifier.height(20.dp))
     }
+}
+
+@Composable
+private fun EmergencyScreen(name: String, page: Int, onPageChange: (Int) -> Unit) {
+    val context = LocalContext.current
+    var horizontalDrag by remember { mutableStateOf(0f) }
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInput(page) {
+                detectHorizontalDragGestures(
+                    onDragEnd = {
+                        if (horizontalDrag < -70f) onPageChange(1)
+                        if (horizontalDrag > 70f) onPageChange(0)
+                        horizontalDrag = 0f
+                    },
+                    onHorizontalDrag = { _, dragAmount -> horizontalDrag += dragAmount },
+                )
+            }
+            .padding(horizontal = 20.dp),
+    ) {
+        ScreenTitle("Emergency assistance", "Your critical details and help, ready when you need them.")
+        if (page == 0) {
+            EmergencyQrCard(name)
+            Spacer(Modifier.height(14.dp))
+            Text(
+                "Show this code to a paramedic. Swipe left for ambulance and nearby hospitals.",
+                color = Muted,
+                fontSize = 12.sp,
+            )
+            Spacer(Modifier.height(14.dp))
+            EmergencyPageIndicator(page, onPageChange)
+            Spacer(Modifier.height(12.dp))
+            DemoNotice()
+        } else {
+            AmbulanceCard()
+            Spacer(Modifier.height(17.dp))
+            SectionHeading("Nearby hospitals", "Open map") {
+                openHospitalMap(context, "hospitals near Rosebank, Johannesburg")
+            }
+            Spacer(Modifier.height(9.dp))
+            NearbyHospitalMap()
+            Spacer(Modifier.height(10.dp))
+            HospitalRow("Rosebank Clinic", "1.2 km · Clinic", "Rosebank Clinic")
+            Spacer(Modifier.height(8.dp))
+            HospitalRow("Charlotte Maxeke Hospital", "4.8 km · Emergency department", "Charlotte Maxeke Johannesburg Academic Hospital")
+            Spacer(Modifier.height(8.dp))
+            HospitalRow("Netcare Milpark Hospital", "6.2 km · 24-hour emergency", "Netcare Milpark Hospital")
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Distances and map are a demo around Rosebank, not live GPS results.",
+                color = Muted,
+                fontSize = 11.sp,
+            )
+            Spacer(Modifier.height(12.dp))
+            EmergencyPageIndicator(page, onPageChange)
+        }
+        Spacer(Modifier.height(18.dp))
+    }
+}
+
+@Composable
+private fun EmergencyQrCard(name: String) {
+    val qrData = remember(name) {
+        QRCodeWriter().encode(
+            "MEDLINK SA EMERGENCY PROFILE\nName: $name\nBlood type: Not provided\nAllergies: Not provided\nEmergency contact: Not provided",
+            BarcodeFormat.QR_CODE,
+            256,
+            256,
+        )
+    }
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.QrCode2, contentDescription = null, tint = Teal)
+                Spacer(Modifier.width(8.dp))
+                Text("EMERGENCY MEDICAL ID", color = Teal, fontSize = 11.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            }
+            Spacer(Modifier.height(14.dp))
+            Canvas(Modifier.size(224.dp).background(Color.White)) {
+                val cellSize = size.width / qrData.width
+                for (x in 0 until qrData.width) {
+                    for (y in 0 until qrData.height) {
+                        if (qrData.get(x, y)) {
+                            drawRect(
+                                color = Color.Black,
+                                topLeft = Offset(x * cellSize, y * cellSize),
+                                size = androidx.compose.ui.geometry.Size(cellSize, cellSize),
+                            )
+                        }
+                    }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+            Text(name, color = Ink, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text("Blood type, allergies and contact: not added", color = Muted, fontSize = 11.sp)
+            Spacer(Modifier.height(12.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Mint).padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(Icons.Default.Security, contentDescription = null, tint = Teal, modifier = Modifier.size(19.dp))
+                Spacer(Modifier.width(9.dp))
+                Text("Demo QR only. Add verified medical details before relying on this ID.", color = Ink, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+private fun EmergencyPageIndicator(page: Int, onPageChange: (Int) -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        listOf("QR medical ID", "Ambulance & hospitals").forEachIndexed { index, label ->
+            Text(
+                text = if (page == index) "● $label" else "○ $label",
+                modifier = Modifier
+                    .clip(RoundedCornerShape(20.dp))
+                    .clickable { onPageChange(index) }
+                    .padding(horizontal = 10.dp, vertical = 7.dp),
+                color = if (page == index) Teal else Muted,
+                fontSize = 11.sp,
+                fontWeight = if (page == index) FontWeight.Bold else FontWeight.Normal,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AmbulanceCard() {
+    val context = LocalContext.current
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF0EE)),
+    ) {
+        Column(Modifier.fillMaxWidth().padding(17.dp)) {
+            Text("NEED URGENT HELP?", color = EmergencyRed, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+            Spacer(Modifier.height(5.dp))
+            Text("Call an ambulance", color = Ink, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+            Spacer(Modifier.height(4.dp))
+            Text("South African ambulance service · 10177", color = Muted, fontSize = 12.sp)
+            Spacer(Modifier.height(13.dp))
+            Button(
+                onClick = {
+                    context.startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:10177")))
+                },
+                modifier = Modifier.fillMaxWidth().height(52.dp),
+                shape = RoundedCornerShape(13.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = EmergencyRed),
+            ) {
+                Icon(Icons.Default.Call, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Call 10177", fontWeight = FontWeight.Bold)
+            }
+            Spacer(Modifier.height(7.dp))
+            Text("Opens your phone dialer; confirm the call there.", color = Muted, fontSize = 10.sp)
+        }
+    }
+}
+
+@Composable
+private fun NearbyHospitalMap() {
+    BoxWithConstraints(
+        modifier = Modifier.fillMaxWidth().height(170.dp).clip(RoundedCornerShape(16.dp)),
+    ) {
+        Canvas(Modifier.fillMaxSize().background(Color(0xFFE6F0E8))) {
+            drawLine(Color.White, Offset(0f, size.height * 0.30f), Offset(size.width, size.height * 0.47f), 18f)
+            drawLine(Color.White, Offset(0f, size.height * 0.78f), Offset(size.width, size.height * 0.63f), 14f)
+            drawLine(Color.White, Offset(size.width * 0.28f, 0f), Offset(size.width * 0.52f, size.height), 13f)
+            drawLine(Color.White, Offset(size.width * 0.77f, 0f), Offset(size.width * 0.62f, size.height), 11f)
+            drawLine(Color(0xFFD0E0D5), Offset(0f, size.height * 0.30f), Offset(size.width, size.height * 0.47f), 1f)
+            drawLine(Color(0xFFD0E0D5), Offset(0f, size.height * 0.78f), Offset(size.width, size.height * 0.63f), 1f)
+        }
+        Text(
+            "ROSEBANK, JOHANNESBURG",
+            modifier = Modifier.align(Alignment.TopStart).padding(11.dp),
+            color = Teal,
+            fontSize = 9.sp,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.8.sp,
+        )
+        MapPin("Rosebank Clinic", modifier = Modifier.align(Alignment.TopStart).padding(start = maxWidth * 0.58f, top = 47.dp))
+        MapPin("Charlotte Maxeke", modifier = Modifier.align(Alignment.TopStart).padding(start = maxWidth * 0.20f, top = 105.dp))
+        MapPin("Milpark", modifier = Modifier.align(Alignment.TopStart).padding(start = maxWidth * 0.69f, top = 118.dp))
+        Row(
+            modifier = Modifier.align(Alignment.BottomStart).padding(9.dp).clip(RoundedCornerShape(10.dp))
+                .background(Color.White.copy(alpha = 0.92f)).padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.MyLocation, contentDescription = null, tint = Teal, modifier = Modifier.size(13.dp))
+            Spacer(Modifier.width(4.dp))
+            Text("Demo map", color = Ink, fontSize = 9.sp, fontWeight = FontWeight.Medium)
+        }
+    }
+}
+
+@Composable
+private fun MapPin(label: String, modifier: Modifier = Modifier) {
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Surface(shape = CircleShape, color = Teal, modifier = Modifier.size(22.dp)) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(Icons.Default.LocalHospital, contentDescription = null, tint = Color.White, modifier = Modifier.size(13.dp))
+            }
+        }
+        Text(
+            label,
+            modifier = Modifier.clip(RoundedCornerShape(4.dp)).background(Color.White.copy(alpha = 0.94f)).padding(horizontal = 4.dp, vertical = 2.dp),
+            color = Ink,
+            fontSize = 8.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}
+
+@Composable
+private fun HospitalRow(name: String, details: String, mapQuery: String) {
+    val context = LocalContext.current
+    Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 13.dp, vertical = 12.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Default.LocalHospital, contentDescription = null, tint = Teal, modifier = Modifier.size(21.dp))
+            Spacer(Modifier.width(10.dp))
+            Column(Modifier.weight(1f)) {
+                Text(name, color = Ink, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                Text(details, color = Muted, fontSize = 10.sp)
+            }
+            TextButton(
+                onClick = { openHospitalMap(context, mapQuery) },
+            ) {
+                Icon(Icons.Default.Directions, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text("Go", fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+private fun openHospitalMap(context: android.content.Context, query: String) {
+    val mapUri = Uri.parse("https://www.google.com/maps/search/?api=1&query=${Uri.encode(query)}")
+    context.startActivity(Intent(Intent.ACTION_VIEW, mapUri))
 }
 
 @Composable
