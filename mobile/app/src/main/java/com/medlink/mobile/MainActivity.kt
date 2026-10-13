@@ -1,8 +1,11 @@
 package com.medlink.mobile
 
 import android.content.Intent
+import android.database.sqlite.SQLiteConstraintException
+import android.database.sqlite.SQLiteException
 import android.net.Uri
 import android.os.Bundle
+import android.util.Patterns
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
@@ -63,6 +66,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -70,6 +74,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -83,6 +88,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
+import kotlinx.coroutines.launch
+import java.security.GeneralSecurityException
+import java.util.Locale
 
 private val Ink = Color(0xFF17333A)
 private val Muted = Color(0xFF718489)
@@ -102,10 +110,15 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 private fun MedLinkApp() {
+    val context = LocalContext.current
+    val authRepository = remember(context) {
+        LocalAuthRepository(MedLinkDatabase.getInstance(context).localAccountDao())
+    }
     var signedIn by rememberSaveable { mutableStateOf(false) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var emergencyPage by rememberSaveable { mutableIntStateOf(0) }
     var patientName by rememberSaveable { mutableStateOf("Aisha Patel") }
+    var patientEmail by rememberSaveable { mutableStateOf("") }
     var message by remember { mutableStateOf<String?>(null) }
 
     MaterialTheme(
@@ -120,8 +133,9 @@ private fun MedLinkApp() {
     ) {
         Surface(modifier = Modifier.fillMaxSize(), color = Canvas) {
             if (!signedIn) {
-                SignInScreen(onContinue = { name ->
-                    if (name.isNotBlank()) patientName = name
+                SignInScreen(authRepository, onSignedIn = { name, email ->
+                    patientName = name
+                    patientEmail = email
                     signedIn = true
                 })
             } else {
@@ -161,7 +175,15 @@ private fun MedLinkApp() {
                             2 -> EmergencyScreen(patientName, emergencyPage) { emergencyPage = it }
                             3 -> CareScreen(onMessage = { message = it })
                             4 -> RecordsScreen()
-                            else -> ProfileScreen(patientName) { patientName = it }
+                            else -> ProfileScreen(
+                                patientName,
+                                patientEmail,
+                                onNameChange = { patientName = it },
+                                onSignOut = {
+                                    signedIn = false
+                                    selectedTab = 0
+                                },
+                            )
                         }
                     }
                 }
@@ -182,11 +204,18 @@ private fun MedLinkApp() {
 }
 
 @Composable
-private fun SignInScreen(onContinue: (String) -> Unit) {
+private fun SignInScreen(
+    authRepository: LocalAuthRepository,
+    onSignedIn: (String, String) -> Unit,
+) {
+    val coroutineScope = rememberCoroutineScope()
     var createAccount by rememberSaveable { mutableStateOf(false) }
     var name by rememberSaveable { mutableStateOf("") }
     var email by rememberSaveable { mutableStateOf("") }
-    var password by rememberSaveable { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var errorMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var isLoading by rememberSaveable { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -204,7 +233,7 @@ private fun SignInScreen(onContinue: (String) -> Unit) {
         if (createAccount) {
             OutlinedTextField(
                 value = name,
-                onValueChange = { name = it },
+                onValueChange = { name = it; errorMessage = null },
                 modifier = Modifier.fillMaxWidth(),
                 label = { Text("Full name") },
                 singleLine = true,
@@ -213,7 +242,7 @@ private fun SignInScreen(onContinue: (String) -> Unit) {
         }
         OutlinedTextField(
             value = email,
-            onValueChange = { email = it },
+            onValueChange = { email = it; errorMessage = null },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Email address") },
             singleLine = true,
@@ -221,27 +250,96 @@ private fun SignInScreen(onContinue: (String) -> Unit) {
         Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = password,
-            onValueChange = { password = it },
+            onValueChange = { password = it; errorMessage = null },
             modifier = Modifier.fillMaxWidth(),
             label = { Text("Password") },
             visualTransformation = PasswordVisualTransformation(),
             singleLine = true,
         )
+        if (createAccount) {
+            Spacer(Modifier.height(12.dp))
+            OutlinedTextField(
+                value = confirmPassword,
+                onValueChange = { confirmPassword = it; errorMessage = null },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text("Confirm password") },
+                visualTransformation = PasswordVisualTransformation(),
+                singleLine = true,
+            )
+        }
         Spacer(Modifier.height(20.dp))
         Button(
-            onClick = { onContinue(name.ifBlank { "Aisha Patel" }) },
+            onClick = {
+                val normalizedEmail = email.trim().lowercase(Locale.ROOT)
+                errorMessage = when {
+                    createAccount && name.isBlank() -> "Enter your full name."
+                    !Patterns.EMAIL_ADDRESS.matcher(normalizedEmail).matches() -> "Enter a valid email address."
+                    password.length !in 8..128 -> "Password must be between 8 and 128 characters."
+                    createAccount && password != confirmPassword -> "Passwords do not match."
+                    else -> null
+                }
+                if (errorMessage == null) {
+                    isLoading = true
+                    coroutineScope.launch {
+                        try {
+                            val result = if (createAccount) {
+                                authRepository.register(name, normalizedEmail, password)
+                            } else {
+                                authRepository.signIn(normalizedEmail, password)
+                            }
+                            when (result) {
+                                is LocalAuthResult.Success -> {
+                                    password = ""
+                                    confirmPassword = ""
+                                    onSignedIn(result.name, result.email)
+                                }
+                                LocalAuthResult.InvalidCredentials ->
+                                    errorMessage = "Email or password is incorrect."
+                                LocalAuthResult.AccountAlreadyExists ->
+                                    errorMessage = "An account with this email already exists. Sign in instead."
+                            }
+                        } catch (exception: SQLiteConstraintException) {
+                            errorMessage = "An account with this email already exists. Sign in instead."
+                        } catch (exception: SQLiteException) {
+                            errorMessage = "The local account database could not be accessed. Please try again."
+                        } catch (exception: GeneralSecurityException) {
+                            errorMessage = "Secure password processing failed. Please try again."
+                        } finally {
+                            isLoading = false
+                        }
+                    }
+                }
+            },
             modifier = Modifier.fillMaxWidth().height(54.dp),
             shape = RoundedCornerShape(14.dp),
+            enabled = !isLoading,
         ) {
-            Text(if (createAccount) "Create account" else "Sign in", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Spacer(Modifier.width(8.dp))
-            Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+            if (isLoading) {
+                CircularProgressIndicator(modifier = Modifier.size(21.dp), color = Color.White, strokeWidth = 2.dp)
+            } else {
+                Text(if (createAccount) "Create account" else "Sign in", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Spacer(Modifier.width(8.dp))
+                Icon(Icons.AutoMirrored.Filled.ArrowForward, contentDescription = null)
+            }
         }
-        TextButton(onClick = { createAccount = !createAccount }, modifier = Modifier.align(Alignment.CenterHorizontally)) {
+        errorMessage?.let {
+            Text(it, color = EmergencyRed, fontSize = 12.sp)
+            Spacer(Modifier.height(4.dp))
+        }
+        TextButton(
+            onClick = {
+                createAccount = !createAccount
+                errorMessage = null
+                password = ""
+                confirmPassword = ""
+            },
+            modifier = Modifier.align(Alignment.CenterHorizontally),
+            enabled = !isLoading,
+        ) {
             Text(if (createAccount) "Already have an account? Sign in" else "New to MedLink? Create an account", color = Teal)
         }
         Spacer(Modifier.height(12.dp))
-        DemoNotice()
+        LocalAuthNotice()
     }
 }
 
@@ -676,8 +774,13 @@ private fun RecordsScreen() {
 }
 
 @Composable
-private fun ProfileScreen(name: String, onNameChange: (String) -> Unit) {
-    var email by rememberSaveable { mutableStateOf("aisha.patel@example.com") }
+private fun ProfileScreen(
+    name: String,
+    initialEmail: String,
+    onNameChange: (String) -> Unit,
+    onSignOut: () -> Unit,
+) {
+    var email by rememberSaveable(initialEmail) { mutableStateOf(initialEmail) }
     var phone by rememberSaveable { mutableStateOf("+27 82 555 0142") }
     var saved by rememberSaveable { mutableStateOf(false) }
     Column(Modifier.padding(horizontal = 20.dp)) {
@@ -690,6 +793,10 @@ private fun ProfileScreen(name: String, onNameChange: (String) -> Unit) {
         Spacer(Modifier.height(16.dp))
         Button(onClick = { saved = true }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
             Text(if (saved) "Details saved on this screen" else "Save details")
+        }
+        Spacer(Modifier.height(16.dp))
+        OutlinedButton(onClick = onSignOut, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
+            Text("Sign out")
         }
         Spacer(Modifier.height(16.dp))
         DemoNotice()
@@ -819,7 +926,22 @@ private fun DemoNotice() {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Tune, contentDescription = null, tint = Coral, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Demo only. No account, health data, or requests are saved or sent.", color = Color(0xFF76564B), fontSize = 11.sp)
+            Text("Other health features are demos; medical records, requests and messages are not saved or sent.", color = Color(0xFF76564B), fontSize = 11.sp)
+        }
+    }
+}
+
+@Composable
+private fun LocalAuthNotice() {
+    Card(shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = Mint)) {
+        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+            Icon(Icons.Default.Security, contentDescription = null, tint = Teal, modifier = Modifier.size(18.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "Accounts are stored on this device only. Passwords are salted and hashed; there is no online account recovery.",
+                color = Ink,
+                fontSize = 11.sp,
+            )
         }
     }
 }
