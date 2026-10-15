@@ -14,8 +14,10 @@ import androidx.room.ColumnInfo
 import androidx.room.Update
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import kotlinx.coroutines.flow.Flow
 import java.security.MessageDigest
 import java.security.SecureRandom
+import java.util.UUID
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.PBEKeySpec
 
@@ -45,9 +47,34 @@ interface LocalAccountDao {
     suspend fun update(account: LocalAccount)
 }
 
-@Database(entities = [LocalAccount::class], version = 2, exportSchema = false)
+@Entity(tableName = "appointments", indices = [androidx.room.Index("patientEmail")])
+data class LocalAppointment(
+    @PrimaryKey val id: String,
+    val patientEmail: String,
+    val doctorName: String,
+    val specialty: String,
+    val facility: String,
+    val scheduledAtMillis: Long,
+    val reason: String,
+    val status: String,
+)
+
+@Dao
+interface LocalAppointmentDao {
+    @Query("SELECT * FROM appointments WHERE patientEmail = :patientEmail ORDER BY scheduledAtMillis ASC")
+    fun observeForPatient(patientEmail: String): Flow<List<LocalAppointment>>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(appointment: LocalAppointment)
+
+    @Query("DELETE FROM appointments WHERE id = :appointmentId AND patientEmail = :patientEmail")
+    suspend fun delete(appointmentId: String, patientEmail: String)
+}
+
+@Database(entities = [LocalAccount::class, LocalAppointment::class], version = 3, exportSchema = false)
 abstract class MedLinkDatabase : RoomDatabase() {
     abstract fun localAccountDao(): LocalAccountDao
+    abstract fun localAppointmentDao(): LocalAppointmentDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -60,6 +87,27 @@ abstract class MedLinkDatabase : RoomDatabase() {
                 database.execSQL("ALTER TABLE local_accounts ADD COLUMN emergencyContactPhone TEXT NOT NULL DEFAULT ''")
             }
         }
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS appointments (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        patientEmail TEXT NOT NULL,
+                        doctorName TEXT NOT NULL,
+                        specialty TEXT NOT NULL,
+                        facility TEXT NOT NULL,
+                        scheduledAtMillis INTEGER NOT NULL,
+                        reason TEXT NOT NULL,
+                        status TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_appointments_patientEmail ON appointments(patientEmail)",
+                )
+            }
+        }
 
         @Volatile
         private var instance: MedLinkDatabase? = null
@@ -70,7 +118,7 @@ abstract class MedLinkDatabase : RoomDatabase() {
                     context.applicationContext,
                     MedLinkDatabase::class.java,
                     "medlink-local.db",
-                ).addMigrations(MIGRATION_1_2).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
             }
     }
 }
@@ -139,5 +187,36 @@ class LocalAuthRepository(private val accounts: LocalAccountDao) {
         const val SALT_BYTES = 16
         const val PBKDF2_ITERATIONS = 600_000
         const val HASH_BITS = 256
+    }
+}
+
+class LocalAppointmentRepository(private val appointments: LocalAppointmentDao) {
+    fun observeForPatient(patientEmail: String): Flow<List<LocalAppointment>> =
+        appointments.observeForPatient(patientEmail)
+
+    suspend fun request(
+        patientEmail: String,
+        doctorName: String,
+        specialty: String,
+        facility: String,
+        scheduledAtMillis: Long,
+        reason: String,
+    ) {
+        appointments.insert(
+            LocalAppointment(
+                id = UUID.randomUUID().toString(),
+                patientEmail = patientEmail,
+                doctorName = doctorName.trim(),
+                specialty = specialty.trim(),
+                facility = facility.trim(),
+                scheduledAtMillis = scheduledAtMillis,
+                reason = reason.trim(),
+                status = "Requested",
+            ),
+        )
+    }
+
+    suspend fun cancel(appointment: LocalAppointment) {
+        appointments.delete(appointment.id, appointment.patientEmail)
     }
 }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -68,6 +69,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -81,7 +83,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -90,15 +94,22 @@ import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import kotlinx.coroutines.launch
 import java.security.GeneralSecurityException
+import java.time.Instant
+import java.time.LocalDate
+import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.DateTimeParseException
 import java.util.Locale
 
-private val Ink = Color(0xFF17333A)
-private val Muted = Color(0xFF718489)
-private val Canvas = Color(0xFFF3F7F5)
-private val Teal = Color(0xFF176B63)
-private val Mint = Color(0xFFDCEFE8)
-private val Coral = Color(0xFFE68168)
-private val Line = Color(0xFFE2EAE6)
+private val Ink = Color(0xFF30336F)
+private val Muted = Color(0xFF737796)
+private val Canvas = Color(0xFFF7F8FC)
+private val Teal = Color(0xFF20AFC0)
+private val Mint = Color(0xFFE2F7F7)
+private val Coral = Color(0xFF7452A3)
+private val Line = Color(0xFFE4E6F0)
+private val Indigo = Color(0xFF465D99)
 private val EmergencyRed = Color(0xFFB73535)
 
 class MainActivity : ComponentActivity() {
@@ -114,6 +125,9 @@ private fun MedLinkApp() {
     val authRepository = remember(context) {
         LocalAuthRepository(MedLinkDatabase.getInstance(context).localAccountDao())
     }
+    val appointmentRepository = remember(context) {
+        LocalAppointmentRepository(MedLinkDatabase.getInstance(context).localAppointmentDao())
+    }
     var currentAccount by remember { mutableStateOf<LocalAccount?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var emergencyPage by rememberSaveable { mutableIntStateOf(0) }
@@ -122,7 +136,13 @@ private fun MedLinkApp() {
     MaterialTheme(
         colorScheme = MaterialTheme.colorScheme.copy(
             primary = Teal,
+            secondary = Indigo,
+            tertiary = Coral,
+            primaryContainer = Mint,
+            secondaryContainer = Color(0xFFE8EAF6),
             onPrimary = Color.White,
+            onPrimaryContainer = Ink,
+            onSecondaryContainer = Ink,
             background = Canvas,
             surface = Color.White,
             onSurface = Ink,
@@ -136,6 +156,9 @@ private fun MedLinkApp() {
                 })
             } else {
                 val account = currentAccount!!
+                val appointments by appointmentRepository
+                    .observeForPatient(account.email)
+                    .collectAsState(initial = emptyList())
                 Scaffold(
                     containerColor = Canvas,
                     bottomBar = {
@@ -167,17 +190,26 @@ private fun MedLinkApp() {
                             .verticalScroll(rememberScrollState()),
                     ) {
                         when (selectedTab) {
-                                0 -> HomeScreen(account.name, onNavigate = { selectedTab = it })
+                            0 -> HomeScreen(
+                                account.name,
+                                appointments.firstOrNull { it.scheduledAtMillis >= System.currentTimeMillis() },
+                                onNavigate = { selectedTab = it },
+                            )
                             1 -> QueueScreen(onMessage = { message = it })
-                                2 -> EmergencyScreen(account, emergencyPage) { emergencyPage = it }
-                            3 -> CareScreen(onMessage = { message = it })
+                            2 -> EmergencyScreen(account, emergencyPage) { emergencyPage = it }
+                            3 -> CareScreen(
+                                account.email,
+                                appointments,
+                                appointmentRepository,
+                                onMessage = { message = it },
+                            )
                             4 -> RecordsScreen()
                             else -> ProfileScreen(
-                                    account,
-                                    authRepository,
-                                    onAccountSaved = { currentAccount = it },
+                                account,
+                                authRepository,
+                                onAccountSaved = { currentAccount = it },
                                 onSignOut = {
-                                        currentAccount = null
+                                    currentAccount = null
                                     selectedTab = 0
                                 },
                             )
@@ -341,19 +373,30 @@ private fun SignInScreen(
 }
 
 @Composable
-private fun HomeScreen(name: String, onNavigate: (Int) -> Unit) {
+private fun HomeScreen(
+    name: String,
+    nextAppointment: LocalAppointment?,
+    onNavigate: (Int) -> Unit,
+) {
     Column(modifier = Modifier.padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(20.dp))
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+            Image(
+                painter = painterResource(R.drawable.medlink_logo),
+                contentDescription = "MedLink logo",
+                modifier = Modifier.size(width = 34.dp, height = 44.dp),
+                contentScale = ContentScale.Fit,
+            )
+            Spacer(Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
-                Text("MEDLINK  /  SOUTH AFRICA", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+                Text("SOUTH AFRICA", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
                 Spacer(Modifier.height(7.dp))
                 Text("Hello, ${name.substringBefore(' ')}", fontSize = 25.sp, fontWeight = FontWeight.Bold, color = Ink)
             }
             Avatar("${name.firstOrNull() ?: 'A'}", Modifier.size(46.dp))
         }
         Spacer(Modifier.height(20.dp))
-        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Teal)) {
+        Card(shape = RoundedCornerShape(20.dp), colors = CardDefaults.cardColors(containerColor = Indigo)) {
             Column(Modifier.padding(20.dp)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(Icons.Default.FavoriteBorder, contentDescription = null, tint = Color.White)
@@ -374,7 +417,11 @@ private fun HomeScreen(name: String, onNavigate: (Int) -> Unit) {
         Spacer(Modifier.height(23.dp))
         SectionHeading("Next appointment", "See all") { onNavigate(3) }
         Spacer(Modifier.height(10.dp))
-        AppointmentCard("Dr. Thandiwe Mokoena", "General Practice", "Tomorrow  ·  09:30", "Rosebank Clinic")
+        if (nextAppointment == null) {
+            Text("No upcoming appointments yet.", color = Muted, fontSize = 12.sp)
+        } else {
+            AppointmentCard(nextAppointment)
+        }
         Spacer(Modifier.height(22.dp))
         SectionHeading("Quick access", null, null)
         Spacer(Modifier.height(10.dp))
@@ -729,28 +776,202 @@ private fun QueueScreen(onMessage: (String) -> Unit) {
 }
 
 @Composable
-private fun CareScreen(onMessage: (String) -> Unit) {
+private fun CareScreen(
+    patientEmail: String,
+    appointments: List<LocalAppointment>,
+    repository: LocalAppointmentRepository,
+    onMessage: (String) -> Unit,
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var doctorName by rememberSaveable { mutableStateOf("") }
+    var specialty by rememberSaveable { mutableStateOf("") }
+    var facility by rememberSaveable { mutableStateOf("") }
+    var appointmentDate by rememberSaveable { mutableStateOf("") }
+    var appointmentTime by rememberSaveable { mutableStateOf("") }
+    var reason by rememberSaveable { mutableStateOf("") }
+    var isSaving by rememberSaveable { mutableStateOf(false) }
+    var statusMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    val now = System.currentTimeMillis()
+    val upcomingAppointments = appointments.filter { it.scheduledAtMillis >= now }
+    val pastAppointments = appointments.filter { it.scheduledAtMillis < now }.asReversed()
+
     Column(Modifier.padding(horizontal = 20.dp)) {
-        ScreenTitle("Care team", "Appointments and doctor communication.")
-        Button(onClick = { onMessage("Appointment requests and doctor messaging will work when MedLink's secure care API is connected.") }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(12.dp)) {
-            Icon(Icons.Default.CalendarMonth, contentDescription = null)
-            Spacer(Modifier.width(8.dp))
-            Text("Request an appointment")
+        ScreenTitle("Appointments", "Request a visit and keep track of your care.")
+        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("REQUEST AN APPOINTMENT", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = doctorName,
+                    onValueChange = { doctorName = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Doctor or provider") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = specialty,
+                    onValueChange = { specialty = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Specialty") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = facility,
+                    onValueChange = { facility = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Clinic or facility") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = appointmentDate,
+                    onValueChange = { appointmentDate = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Date (YYYY-MM-DD)") },
+                    supportingText = { Text("Use the YYYY-MM-DD format and choose a future date.") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = appointmentTime,
+                    onValueChange = { appointmentTime = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Time (24-hour, HH:MM)") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = reason,
+                    onValueChange = { reason = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Reason for visit (optional)") },
+                    minLines = 2,
+                )
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    onClick = {
+                        statusMessage = when {
+                            doctorName.isBlank() -> "Enter the doctor or provider."
+                            specialty.isBlank() -> "Enter the appointment specialty."
+                            facility.isBlank() -> "Enter the clinic or facility."
+                            doctorName.length > 100 || specialty.length > 100 || facility.length > 150 ->
+                                "Provider, specialty, and facility must be 100, 100, and 150 characters or fewer."
+                            reason.length > 500 -> "The visit reason must be 500 characters or fewer."
+                            else -> null
+                        }
+                        if (statusMessage == null) {
+                            val scheduledAt = try {
+                                val date = LocalDate.parse(appointmentDate.trim())
+                                if (date.year !in 1..9999) {
+                                    throw DateTimeParseException("Year is out of range", appointmentDate, 0)
+                                }
+                                val time = LocalTime.parse(appointmentTime.trim())
+                                date.atTime(time).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                            } catch (_: DateTimeParseException) {
+                                statusMessage = "Enter a valid date (YYYY-MM-DD) and time (HH:MM)."
+                                null
+                            }
+                            if (scheduledAt != null && scheduledAt < System.currentTimeMillis()) {
+                                statusMessage = "Choose a future date and time."
+                            } else if (scheduledAt != null) {
+                                isSaving = true
+                                statusMessage = null
+                                coroutineScope.launch {
+                                    try {
+                                        repository.request(
+                                            patientEmail = patientEmail,
+                                            doctorName = doctorName,
+                                            specialty = specialty,
+                                            facility = facility,
+                                            scheduledAtMillis = scheduledAt,
+                                            reason = reason,
+                                        )
+                                        doctorName = ""
+                                        specialty = ""
+                                        facility = ""
+                                        appointmentDate = ""
+                                        appointmentTime = ""
+                                        reason = ""
+                                        statusMessage = "Appointment request saved on this device."
+                                    } catch (exception: SQLiteException) {
+                                        statusMessage = "Could not save the appointment locally. Please try again."
+                                    } finally {
+                                        isSaving = false
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isSaving,
+                ) {
+                    if (isSaving) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.CalendarMonth, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Save appointment request")
+                    }
+                }
+                statusMessage?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        it,
+                        color = if (it.startsWith("Appointment request saved")) Teal else EmergencyRed,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
         }
-        Spacer(Modifier.height(20.dp))
+        Spacer(Modifier.height(22.dp))
         Text("UPCOMING APPOINTMENTS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
-        AppointmentCard("Dr. Sipho Dlamini", "Cardiology", "Today  ·  16:00", "Chris Hani Baragwanath")
+        if (upcomingAppointments.isEmpty()) {
+            Text("No upcoming appointments. Submit a request above to add one.", color = Muted, fontSize = 12.sp)
+        } else {
+            upcomingAppointments.forEach { appointment ->
+                AppointmentCard(appointment, onCancel = {
+                    coroutineScope.launch {
+                        try {
+                            repository.cancel(appointment)
+                        } catch (exception: SQLiteException) {
+                            statusMessage = "Could not remove the appointment. Please try again."
+                        }
+                    }
+                })
+                Spacer(Modifier.height(9.dp))
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text("PAST APPOINTMENTS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
-        AppointmentCard("Dr. Thandiwe Mokoena", "General Practice", "Tomorrow  ·  09:30", "Rosebank Clinic")
-        Spacer(Modifier.height(21.dp))
+        if (pastAppointments.isEmpty()) {
+            Text("Past appointments will appear here.", color = Muted, fontSize = 12.sp)
+        } else {
+            pastAppointments.forEach { appointment ->
+                AppointmentCard(appointment)
+                Spacer(Modifier.height(9.dp))
+            }
+        }
+        Spacer(Modifier.height(14.dp))
         Text("YOUR DOCTORS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
-        DoctorRow("Dr. Sipho Dlamini", "Cardiology", "SD") { onMessage("Secure messaging with Dr. Dlamini will be available once a provider connection is configured.") }
+        DoctorRow("Dr. Sipho Dlamini", "Cardiology", "SD") {
+            onMessage("Secure messaging with Dr. Dlamini will be available once a provider connection is configured.")
+        }
         Spacer(Modifier.height(8.dp))
-        DoctorRow("Dr. Thandiwe Mokoena", "General Practice", "TM") { onMessage("Secure messaging with Dr. Mokoena will be available once a provider connection is configured.") }
+        DoctorRow("Dr. Thandiwe Mokoena", "General Practice", "TM") {
+            onMessage("Secure messaging with Dr. Mokoena will be available once a provider connection is configured.")
+        }
         Spacer(Modifier.height(16.dp))
-        DemoNotice()
+        Text(
+            "Appointments are saved locally as personal reminders; they are not sent to the provider or clinic.",
+            color = Muted,
+            fontSize = 11.sp,
+        )
         Spacer(Modifier.height(20.dp))
     }
 }
@@ -927,7 +1148,16 @@ private fun ProfileScreen(
 @Composable
 private fun ScreenTitle(title: String, subtitle: String) {
     Spacer(Modifier.height(22.dp))
-    Text("MEDLINK  /  PATIENT", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+    Row(verticalAlignment = Alignment.CenterVertically) {
+        Image(
+            painter = painterResource(R.drawable.medlink_logo),
+            contentDescription = "MedLink logo",
+            modifier = Modifier.size(width = 18.dp, height = 24.dp),
+            contentScale = ContentScale.Fit,
+        )
+        Spacer(Modifier.width(6.dp))
+        Text("MEDLINK  /  PATIENT", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+    }
     Spacer(Modifier.height(7.dp))
     Text(title, fontSize = 27.sp, fontWeight = FontWeight.Bold, color = Ink)
     Spacer(Modifier.height(5.dp))
@@ -944,18 +1174,39 @@ private fun SectionHeading(title: String, action: String?, onAction: (() -> Unit
 }
 
 @Composable
-private fun AppointmentCard(doctor: String, specialty: String, time: String, facility: String) {
+private fun AppointmentCard(appointment: LocalAppointment, onCancel: (() -> Unit)? = null) {
+    val appointmentTime = remember(appointment.scheduledAtMillis) {
+        DateTimeFormatter.ofPattern("EEE, d MMM yyyy · HH:mm", Locale.getDefault())
+            .format(Instant.ofEpochMilli(appointment.scheduledAtMillis).atZone(ZoneId.systemDefault()))
+    }
     Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-        Row(Modifier.fillMaxWidth().padding(15.dp), verticalAlignment = Alignment.CenterVertically) {
-            Avatar(doctor.split(" ").filter { it.startsWith("Dr.").not() }.take(2).mapNotNull { it.firstOrNull() }.joinToString(""), Modifier.size(42.dp))
-            Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
-                Text(doctor, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
-                Text(specialty, color = Muted, fontSize = 12.sp)
-                Spacer(Modifier.height(5.dp))
-                Text("$time · $facility", color = Teal, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+        Column(Modifier.fillMaxWidth().padding(15.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Avatar(
+                    appointment.doctorName.split(" ").filter { it.startsWith("Dr.").not() }
+                        .take(2).mapNotNull { it.firstOrNull() }.joinToString(""),
+                    Modifier.size(42.dp),
+                )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(appointment.doctorName, color = Ink, fontWeight = FontWeight.SemiBold, fontSize = 14.sp)
+                    Text(appointment.specialty, color = Muted, fontSize = 12.sp)
+                    Spacer(Modifier.height(5.dp))
+                    Text("$appointmentTime · ${appointment.facility}", color = Teal, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+                    Text("Saved locally · ${appointment.status}", color = Muted, fontSize = 10.sp)
+                }
+                Icon(Icons.Default.Schedule, contentDescription = "Appointment time", tint = Teal, modifier = Modifier.size(19.dp))
             }
-            Icon(Icons.Default.Schedule, contentDescription = "Appointment time", tint = Teal, modifier = Modifier.size(19.dp))
+            if (appointment.reason.isNotBlank()) {
+                Spacer(Modifier.height(9.dp))
+                Text("Reason: ${appointment.reason}", color = Muted, fontSize = 11.sp)
+            }
+            if (onCancel != null) {
+                Spacer(Modifier.height(4.dp))
+                TextButton(onClick = onCancel, modifier = Modifier.align(Alignment.End)) {
+                    Text("Remove request", color = EmergencyRed, fontSize = 11.sp)
+                }
+            }
         }
     }
 }
@@ -1028,15 +1279,16 @@ private fun Avatar(label: String, modifier: Modifier = Modifier) {
 
 @Composable
 private fun BrandMark() {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Surface(shape = RoundedCornerShape(12.dp), color = Teal, modifier = Modifier.size(42.dp)) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                Icon(Icons.Default.FavoriteBorder, contentDescription = null, tint = Color.White)
-            }
-        }
-        Spacer(Modifier.width(10.dp))
-        Text("medlink", color = Ink, fontSize = 23.sp, fontWeight = FontWeight.Bold)
-        Text("  SA", color = Teal, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Image(
+            painter = painterResource(R.drawable.medlink_logo),
+            contentDescription = "MedLink — Help us help you",
+            modifier = Modifier.size(width = 140.dp, height = 182.dp),
+            contentScale = ContentScale.Fit,
+        )
     }
 }
 
@@ -1046,7 +1298,7 @@ private fun DemoNotice() {
         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Icon(Icons.Default.Tune, contentDescription = null, tint = Coral, modifier = Modifier.size(18.dp))
             Spacer(Modifier.width(8.dp))
-            Text("Other health features are demos; medical records, requests and messages are not saved or sent.", color = Color(0xFF76564B), fontSize = 11.sp)
+            Text("Queue tickets, medical records and doctor messages are demo-only; they are not saved or sent.", color = Color(0xFF76564B), fontSize = 11.sp)
         }
     }
 }
