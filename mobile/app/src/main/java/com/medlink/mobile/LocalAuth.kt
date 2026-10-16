@@ -71,10 +71,38 @@ interface LocalAppointmentDao {
     suspend fun delete(appointmentId: String, patientEmail: String)
 }
 
-@Database(entities = [LocalAccount::class, LocalAppointment::class], version = 3, exportSchema = false)
+@Entity(tableName = "medical_records", indices = [androidx.room.Index("patientEmail")])
+data class LocalMedicalRecord(
+    @PrimaryKey val id: String,
+    val patientEmail: String,
+    val title: String,
+    val category: String,
+    val provider: String,
+    val recordedAtMillis: Long,
+    val notes: String,
+)
+
+@Dao
+interface LocalMedicalRecordDao {
+    @Query("SELECT * FROM medical_records WHERE patientEmail = :patientEmail ORDER BY recordedAtMillis DESC")
+    fun observeForPatient(patientEmail: String): Flow<List<LocalMedicalRecord>>
+
+    @Insert(onConflict = OnConflictStrategy.ABORT)
+    suspend fun insert(record: LocalMedicalRecord)
+
+    @Query("DELETE FROM medical_records WHERE id = :recordId AND patientEmail = :patientEmail")
+    suspend fun delete(recordId: String, patientEmail: String)
+}
+
+@Database(
+    entities = [LocalAccount::class, LocalAppointment::class, LocalMedicalRecord::class],
+    version = 4,
+    exportSchema = false,
+)
 abstract class MedLinkDatabase : RoomDatabase() {
     abstract fun localAccountDao(): LocalAccountDao
     abstract fun localAppointmentDao(): LocalAppointmentDao
+    abstract fun localMedicalRecordDao(): LocalMedicalRecordDao
 
     companion object {
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -108,6 +136,26 @@ abstract class MedLinkDatabase : RoomDatabase() {
                 )
             }
         }
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS medical_records (
+                        id TEXT NOT NULL PRIMARY KEY,
+                        patientEmail TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        recordedAtMillis INTEGER NOT NULL,
+                        notes TEXT NOT NULL
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS index_medical_records_patientEmail ON medical_records(patientEmail)",
+                )
+            }
+        }
 
         @Volatile
         private var instance: MedLinkDatabase? = null
@@ -118,7 +166,7 @@ abstract class MedLinkDatabase : RoomDatabase() {
                     context.applicationContext,
                     MedLinkDatabase::class.java,
                     "medlink-local.db",
-                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build().also { instance = it }
+                ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build().also { instance = it }
             }
     }
 }
@@ -218,5 +266,35 @@ class LocalAppointmentRepository(private val appointments: LocalAppointmentDao) 
 
     suspend fun cancel(appointment: LocalAppointment) {
         appointments.delete(appointment.id, appointment.patientEmail)
+    }
+}
+
+class LocalMedicalRecordRepository(private val records: LocalMedicalRecordDao) {
+    fun observeForPatient(patientEmail: String): Flow<List<LocalMedicalRecord>> =
+        records.observeForPatient(patientEmail)
+
+    suspend fun add(
+        patientEmail: String,
+        title: String,
+        category: String,
+        provider: String,
+        recordedAtMillis: Long,
+        notes: String,
+    ) {
+        records.insert(
+            LocalMedicalRecord(
+                id = UUID.randomUUID().toString(),
+                patientEmail = patientEmail,
+                title = title.trim(),
+                category = category.trim(),
+                provider = provider.trim(),
+                recordedAtMillis = recordedAtMillis,
+                notes = notes.trim(),
+            ),
+        )
+    }
+
+    suspend fun delete(record: LocalMedicalRecord) {
+        records.delete(record.id, record.patientEmail)
     }
 }

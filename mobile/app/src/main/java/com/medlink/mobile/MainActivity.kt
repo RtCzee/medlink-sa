@@ -128,6 +128,9 @@ private fun MedLinkApp() {
     val appointmentRepository = remember(context) {
         LocalAppointmentRepository(MedLinkDatabase.getInstance(context).localAppointmentDao())
     }
+    val medicalRecordRepository = remember(context) {
+        LocalMedicalRecordRepository(MedLinkDatabase.getInstance(context).localMedicalRecordDao())
+    }
     var currentAccount by remember { mutableStateOf<LocalAccount?>(null) }
     var selectedTab by rememberSaveable { mutableIntStateOf(0) }
     var emergencyPage by rememberSaveable { mutableIntStateOf(0) }
@@ -157,6 +160,9 @@ private fun MedLinkApp() {
             } else {
                 val account = currentAccount!!
                 val appointments by appointmentRepository
+                    .observeForPatient(account.email)
+                    .collectAsState(initial = emptyList())
+                val medicalRecords by medicalRecordRepository
                     .observeForPatient(account.email)
                     .collectAsState(initial = emptyList())
                 Scaffold(
@@ -203,7 +209,7 @@ private fun MedLinkApp() {
                                 appointmentRepository,
                                 onMessage = { message = it },
                             )
-                            4 -> RecordsScreen()
+                            4 -> RecordsScreen(account.email, medicalRecords, medicalRecordRepository)
                             else -> ProfileScreen(
                                 account,
                                 authRepository,
@@ -977,30 +983,209 @@ private fun CareScreen(
 }
 
 @Composable
-private fun RecordsScreen() {
+private fun RecordsScreen(
+    patientEmail: String,
+    records: List<LocalMedicalRecord>,
+    repository: LocalMedicalRecordRepository,
+) {
+    val coroutineScope = rememberCoroutineScope()
+    var title by rememberSaveable { mutableStateOf("") }
+    var category by rememberSaveable { mutableStateOf("") }
+    var provider by rememberSaveable { mutableStateOf("") }
+    var recordDate by rememberSaveable { mutableStateOf("") }
+    var notes by rememberSaveable { mutableStateOf("") }
+    var statusMessage by rememberSaveable { mutableStateOf<String?>(null) }
+    var isSaving by rememberSaveable { mutableStateOf(false) }
+
     Column(Modifier.padding(horizontal = 20.dp)) {
-        ScreenTitle("Medical records", "Your care history, prescriptions, and visit notes.")
+        ScreenTitle("My medical records", "Keep a private copy of your health history on this device.")
         Card(shape = RoundedCornerShape(16.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
-            Column(Modifier.padding(18.dp)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Icon(Icons.Default.Security, contentDescription = null, tint = Teal)
-                    Spacer(Modifier.width(10.dp))
-                    Column {
-                        Text("Private health information", color = Ink, fontWeight = FontWeight.SemiBold)
-                        Text("Only share records with care providers you trust.", color = Muted, fontSize = 12.sp)
-                    }
+            Row(Modifier.fillMaxWidth().padding(18.dp), verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Default.Security, contentDescription = null, tint = Teal)
+                Spacer(Modifier.width(10.dp))
+                Column {
+                    Text("Private local records", color = Ink, fontWeight = FontWeight.SemiBold)
+                    Text("Only this account can view these records on this device.", color = Muted, fontSize = 12.sp)
                 }
             }
         }
-        Spacer(Modifier.height(20.dp))
-        Text("RECENT RECORDS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+        Spacer(Modifier.height(18.dp))
+        Card(shape = RoundedCornerShape(18.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+            Column(Modifier.fillMaxWidth().padding(16.dp)) {
+                Text("ADD A RECORD", color = Teal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = title,
+                    onValueChange = { title = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Record title") },
+                    placeholder = { Text("e.g. Blood test results") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = category,
+                    onValueChange = { category = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Record type") },
+                    placeholder = { Text("e.g. Lab result, diagnosis, visit") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = provider,
+                    onValueChange = { provider = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Provider or facility (optional)") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = recordDate,
+                    onValueChange = { recordDate = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Record date (YYYY-MM-DD)") },
+                    singleLine = true,
+                )
+                Spacer(Modifier.height(10.dp))
+                OutlinedTextField(
+                    value = notes,
+                    onValueChange = { notes = it; statusMessage = null },
+                    modifier = Modifier.fillMaxWidth(),
+                    label = { Text("Notes (optional)") },
+                    minLines = 2,
+                )
+                Spacer(Modifier.height(14.dp))
+                Button(
+                    onClick = {
+                        statusMessage = when {
+                            title.isBlank() -> "Enter a title for this record."
+                            category.isBlank() -> "Enter a record type."
+                            title.length > 120 || category.length > 80 || provider.length > 150 ->
+                                "Title, type, or provider is too long."
+                            notes.length > 2000 -> "Notes must be 2,000 characters or fewer."
+                            else -> null
+                        }
+                        if (statusMessage == null) {
+                            val recordedAt = try {
+                                val date = LocalDate.parse(recordDate.trim())
+                                if (date.isAfter(LocalDate.now())) {
+                                    statusMessage = "Record date cannot be in the future."
+                                    null
+                                } else {
+                                    date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+                                }
+                            } catch (_: DateTimeParseException) {
+                                statusMessage = "Enter a valid record date in YYYY-MM-DD format."
+                                null
+                            }
+                            if (recordedAt != null) {
+                                isSaving = true
+                                coroutineScope.launch {
+                                    try {
+                                        repository.add(
+                                            patientEmail = patientEmail,
+                                            title = title,
+                                            category = category,
+                                            provider = provider,
+                                            recordedAtMillis = recordedAt,
+                                            notes = notes,
+                                        )
+                                        title = ""
+                                        category = ""
+                                        provider = ""
+                                        recordDate = ""
+                                        notes = ""
+                                        statusMessage = "Record saved on this device."
+                                    } catch (exception: SQLiteException) {
+                                        statusMessage = "Could not save this record locally. Please try again."
+                                    } finally {
+                                        isSaving = false
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isSaving,
+                ) {
+                    if (isSaving) {
+                        CircularProgressIndicator(modifier = Modifier.size(20.dp), color = Color.White, strokeWidth = 2.dp)
+                    } else {
+                        Icon(Icons.Default.Add, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Save medical record")
+                    }
+                }
+                statusMessage?.let {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        it,
+                        color = if (it.startsWith("Record saved")) Teal else EmergencyRed,
+                        fontSize = 12.sp,
+                    )
+                }
+            }
+        }
+        Spacer(Modifier.height(22.dp))
+        Text("SAVED RECORDS", color = Muted, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
         Spacer(Modifier.height(10.dp))
-        RecordRow("Cardiology follow-up", "Consultation · Dr. Dlamini", "12 Jun 2025")
-        RecordRow("Chest X-Ray", "Imaging · Rosebank Clinic", "03 Jun 2025")
-        RecordRow("Blood panel — HbA1c", "Lab · Ampath", "28 May 2025")
-        Spacer(Modifier.height(16.dp))
-        DemoNotice()
+        if (records.isEmpty()) {
+            Text("No records saved yet. Add a record above to start your local history.", color = Muted, fontSize = 12.sp)
+        } else {
+            records.forEach { record ->
+                MedicalRecordCard(record) {
+                    coroutineScope.launch {
+                        try {
+                            repository.delete(record)
+                        } catch (exception: SQLiteException) {
+                            statusMessage = "Could not remove this record. Please try again."
+                        }
+                    }
+                }
+                Spacer(Modifier.height(9.dp))
+            }
+        }
+        Spacer(Modifier.height(14.dp))
+        Text(
+            "These are personal notes you enter, not records verified or supplied by a healthcare provider. Records stay on this device and are not sent or backed up.",
+            color = Muted,
+            fontSize = 11.sp,
+        )
         Spacer(Modifier.height(20.dp))
+    }
+}
+
+@Composable
+private fun MedicalRecordCard(record: LocalMedicalRecord, onDelete: () -> Unit) {
+    val date = remember(record.recordedAtMillis) {
+        DateTimeFormatter.ofPattern("d MMM yyyy", Locale.getDefault())
+            .format(Instant.ofEpochMilli(record.recordedAtMillis).atZone(ZoneId.systemDefault()))
+    }
+    Card(shape = RoundedCornerShape(14.dp), colors = CardDefaults.cardColors(containerColor = Color.White)) {
+        Column(Modifier.fillMaxWidth().padding(15.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null, tint = Teal)
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(record.title, color = Ink, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
+                    Text(record.category, color = Muted, fontSize = 11.sp)
+                }
+                Text(date, color = Muted, fontSize = 10.sp)
+            }
+            if (record.provider.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Text(record.provider, color = Teal, fontSize = 11.sp, fontWeight = FontWeight.Medium)
+            }
+            if (record.notes.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(record.notes, color = Ink, fontSize = 12.sp)
+            }
+            TextButton(onClick = onDelete, modifier = Modifier.align(Alignment.End)) {
+                Text("Delete", color = EmergencyRed, fontSize = 11.sp)
+            }
+        }
     }
 }
 
