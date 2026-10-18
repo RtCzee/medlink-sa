@@ -115,6 +115,16 @@ Run from `web/`:
 
 There are no automated tests yet.
 
+## Continuous integration
+
+GitHub Actions runs `.github/workflows/ci.yml` on every push and pull request to `main`:
+
+| Job | Runner | What it does |
+|-----|--------|--------------|
+| `web` | ubuntu-latest, Node 24 | `npm ci` and `npm run build` in `web/`. `npm run lint` also runs but is **non-blocking** (`continue-on-error`) because of 6 existing `react-hooks/set-state-in-effect` errors. |
+| `android` | ubuntu-latest, Temurin JDK 21 | `./gradlew assembleDebug test` in `mobile/`, then uploads the debug APK as the `medlink-debug-apk` artifact |
+
+There are no automated tests yet in either app, so the `test` task currently has nothing to run.
 ## Mobile app
 
 The Android app lives in `mobile/`. Open that folder in Android Studio and run the `app` configuration, or build from the command line:

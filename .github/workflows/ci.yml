@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web:
+    name: Web (Next.js build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          # Matches the Node major the build was verified with locally (24.x).
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+      # Non-blocking: the codebase currently has 6 pre-existing
+      # react-hooks/set-state-in-effect lint errors. Remove
+      # continue-on-error once they are fixed.
+      - name: Lint (non-blocking)
+        run: npm run lint
+        continue-on-error: true
+
+  android:
+    name: Android (assembleDebug + unit tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          # JDK 21 matches the Android Studio JBR the build was verified with locally.
+          java-version: 21
+
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          # Open-source caching provider (the default "enhanced" provider has separate license terms).
+          cache-provider: basic
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build debug APK and run unit tests
+        run: ./gradlew assembleDebug test --no-daemon
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: medlink-debug-apk
+          path: mobile/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
