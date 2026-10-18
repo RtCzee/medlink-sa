@@ -7,10 +7,13 @@
     "build": "next build --webpack",
     "start": "next start",
     "lint": "eslint .",
-    "db:push": "prisma db push",
+    "db:validate": "prisma validate",
+    "db:format": "prisma format",
     "db:generate": "prisma generate",
-    "db:migrate": "prisma migrate dev",
-    "db:reset": "prisma migrate reset"
+    "db:migrate:dev": "prisma migrate dev",
+    "db:migrate:deploy": "prisma migrate deploy",
+    "db:migrate:status": "prisma migrate status",
+    "db:migrate:diff": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
