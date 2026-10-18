@@ -256,7 +256,7 @@ export default function SiteNavbar() {
                       <div className="truncate text-xs text-muted-foreground">{user.email}</div>
                     </div>
                   </div>
-                  <button onClick={() => { signOut(); setMobileOpen(false); router.push("/"); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-rose-500 transition-colors hover:bg-rose-500/10">
+                  <button onClick={() => { setMobileOpen(false); void signOut(); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-3 text-sm text-rose-500 transition-colors hover:bg-rose-500/10">
                     <LogOut className="h-4 w-4" />
                     {t("nav.signout")}
                   </button>

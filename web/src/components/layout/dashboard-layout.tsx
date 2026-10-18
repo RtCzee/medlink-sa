@@ -126,7 +126,9 @@ export default function DashboardLayout({
     setMounted(true);
   }, []);
 
-  // auth guard — only fires when auth state actually changes, not on every pathname change
+  // Client-side fallback only: access is enforced on the server (proxy.ts + RoleGate).
+  // If the session ends while the page is open (sign-out in another tab, refresh
+  // token expired), send the user back to sign in.
   useEffect(() => {
     if (!loading && (!user || user.role !== role)) {
       router.replace("/sign-in?redirect=" + encodeURIComponent("/dashboard/" + role));
@@ -145,9 +147,8 @@ export default function DashboardLayout({
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Wait for mount before rendering user-dependent content — prevents
-  // hydration mismatch (user is null on server, populated from localStorage
-  // on client via lazy useState initializer).
+  // Wait for mount before rendering user-dependent content (prevents
+  // hydration mismatches with client-only UI such as the theme toggle).
   if (!mounted || loading || !user) {
     return (
       <div className="grid min-h-[100svh] place-items-center">
@@ -230,10 +231,7 @@ export default function DashboardLayout({
               </div>
             </div>
             <button
-              onClick={() => {
-                signOut();
-                router.push("/");
-              }}
+              onClick={() => void signOut()}
               className="btn-ghost grid h-7 w-7 place-items-center rounded-md"
               aria-label="Sign out"
             >
@@ -301,10 +299,7 @@ export default function DashboardLayout({
               </nav>
               <div className="border-t border-border/50 p-3">
                 <button
-                  onClick={() => {
-                    signOut();
-                    router.push("/");
-                  }}
+                  onClick={() => void signOut()}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2 py-2.5 text-sm text-rose-500 hover:bg-rose-500/10"
                 >
                   <LogOut className="h-4 w-4" />

@@ -2,7 +2,7 @@
 
 import { useState, Suspense } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -12,51 +12,66 @@ import {
   EyeOff,
   ArrowRight,
   AlertCircle,
-  ShieldCheck,
+  CheckCircle2,
 } from "lucide-react";
-import { useAuth, ROLE_DASHBOARDS, type UserRole } from "@/lib/auth-context";
+import { createClient } from "@/utils/supabase/client";
+import { DEFAULT_AFTER_SIGN_IN, safeRedirectPath } from "@/lib/auth/roles";
+import {
+  EMAIL_PATTERN,
+  NETWORK_ERROR_MESSAGE,
+  describeAuthError,
+} from "@/lib/auth/errors";
 
-const TEST_ACCOUNTS = [
-  { email: "admin@gmail.com", label: "Admin" },
-  { email: "adminpatient@gmail.com", label: "Patient" },
-  { email: "admindoctor@gmail.com", label: "Doctor" },
-  { email: "adminhospital@gmail.com", label: "Hospital" },
-  { email: "adminpharmacy@gmail.com", label: "Pharmacy" },
-];
+const URL_ERRORS: Record<string, string> = {
+  confirmation_failed:
+    "That confirmation link is invalid or has expired. Try signing in, or register again to get a new link.",
+};
 
 function SignInForm() {
-  const router = useRouter();
   const params = useSearchParams();
-  const { signIn } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPwd, setShowPwd] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(
+    () => URL_ERRORS[params.get("error") ?? ""] ?? null
+  );
   const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
 
-  const redirect = params.get("redirect");
+  // Only same-site paths are accepted (prevents open redirects).
+  const redirect = safeRedirectPath(params.get("redirect"), DEFAULT_AFTER_SIGN_IN);
 
-  const submit = (e: React.FormEvent) => {
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    const trimmedEmail = email.trim();
+    if (!EMAIL_PATTERN.test(trimmedEmail)) {
+      setError("Enter a valid email address.");
+      return;
+    }
+    if (!password) {
+      setError("Enter your password.");
+      return;
+    }
     setLoading(true);
-    setTimeout(() => {
-      const res = signIn(email, password);
-      setLoading(false);
-      if (!res.ok || !res.user) {
-        setError(res.error ?? "Sign in failed.");
+    try {
+      const { data, error: authError } = await createClient().auth.signInWithPassword({
+        email: trimmedEmail,
+        password,
+      });
+      if (authError || !data.session) {
+        setError(describeAuthError(authError, "Sign in failed. Please try again."));
+        setLoading(false);
         return;
       }
-      // Use hard navigation for reliability + redirect by ACTUAL role (not guessed)
-      const dest = redirect ?? ROLE_DASHBOARDS[res.user.role];
-      window.location.href = dest;
-    }, 350);
-  };
-
-  const quickFill = (em: string) => {
-    setEmail(em);
-    setPassword("12345678");
-    setError(null);
+      setSuccess(true);
+      // Full navigation so the server sees the new session cookie. /dashboard
+      // resolves the user's real role from the database.
+      window.location.assign(redirect);
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
+      setLoading(false);
+    }
   };
 
   return (
@@ -86,13 +101,26 @@ function SignInForm() {
           </p>
 
           {error && (
-            <div className="mt-6 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3.5 py-3 text-sm text-rose-500">
+            <div
+              role="alert"
+              className="mt-6 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3.5 py-3 text-sm text-rose-500"
+            >
               <AlertCircle className="h-4 w-4 shrink-0" />
               {error}
             </div>
           )}
 
-          <form onSubmit={submit} className="mt-6 space-y-4">
+          {success && (
+            <div
+              role="status"
+              className="mt-6 flex items-center gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3.5 py-3 text-sm text-emerald-500"
+            >
+              <CheckCircle2 className="h-4 w-4 shrink-0" />
+              Signed in. Taking you to your dashboard…
+            </div>
+          )}
+
+          <form onSubmit={submit} noValidate className="mt-6 space-y-4">
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Email
@@ -102,6 +130,7 @@ function SignInForm() {
                 <input
                   type="email"
                   required
+                  autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="you@example.com"
@@ -127,6 +156,7 @@ function SignInForm() {
                 <input
                   type={showPwd ? "text" : "password"}
                   required
+                  autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="••••••••"
@@ -149,33 +179,13 @@ function SignInForm() {
 
             <button
               type="submit"
-              disabled={loading}
+              disabled={loading || success}
               className="btn-primary flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold disabled:opacity-60"
             >
-              {loading ? "Signing in…" : "Sign in"}
-              {!loading && <ArrowRight className="h-4 w-4" />}
+              {loading || success ? "Signing in…" : "Sign in"}
+              {!loading && !success && <ArrowRight className="h-4 w-4" />}
             </button>
           </form>
-
-          {/* Quick test accounts */}
-          <div className="mt-8">
-            <div className="mb-2 flex items-center gap-2 text-xs text-muted-foreground">
-              <ShieldCheck className="h-3.5 w-3.5" />
-              Test accounts (password:{" "}
-              <span className="font-mono">12345678</span>)
-            </div>
-            <div className="flex flex-wrap gap-2">
-              {TEST_ACCOUNTS.map((a) => (
-                <button
-                  key={a.email}
-                  onClick={() => quickFill(a.email)}
-                  className="chip cursor-pointer transition-colors hover:border-medical/40 hover:text-medical"
-                >
-                  {a.label}
-                </button>
-              ))}
-            </div>
-          </div>
 
           <p className="mt-8 text-center text-sm text-muted-foreground">
             New to MedLink SA?{" "}
@@ -242,14 +252,6 @@ function SignInForm() {
       </div>
     </div>
   );
-}
-
-function guessRole(email: string): UserRole {
-  if (email.includes("doctor")) return "doctor";
-  if (email.includes("hospital")) return "hospital";
-  if (email.includes("pharmacy")) return "pharmacy";
-  if (email.includes("admin")) return "admin";
-  return "patient";
 }
 
 export default function SignInPage() {

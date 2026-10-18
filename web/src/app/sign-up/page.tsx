@@ -2,7 +2,6 @@
 
 import { useState, Suspense } from "react";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
 import {
   Activity,
@@ -12,57 +11,84 @@ import {
   ArrowRight,
   AlertCircle,
   HeartPulse,
-  Stethoscope,
-  Building2,
-  Pill,
   ShieldCheck,
   Check,
+  MailCheck,
 } from "lucide-react";
-import { useAuth, ROLE_DASHBOARDS, type UserRole } from "@/lib/auth-context";
-import { cn } from "@/lib/utils";
-
-const ROLES: Array<{
-  id: UserRole;
-  label: string;
-  icon: React.ElementType;
-  desc: string;
-}> = [
-  { id: "patient", label: "Patient", icon: HeartPulse, desc: "Get care" },
-  { id: "doctor", label: "Doctor", icon: Stethoscope, desc: "Treat patients" },
-  { id: "hospital", label: "Hospital", icon: Building2, desc: "Run a facility" },
-  { id: "pharmacy", label: "Pharmacy", icon: Pill, desc: "Dispense" },
-];
+import { createClient } from "@/utils/supabase/client";
+import { DEFAULT_AFTER_SIGN_IN } from "@/lib/auth/roles";
+import {
+  EMAIL_PATTERN,
+  MIN_PASSWORD_LENGTH,
+  NETWORK_ERROR_MESSAGE,
+  describeAuthError,
+} from "@/lib/auth/errors";
 
 function SignUpForm() {
-  const router = useRouter();
-  const params = useSearchParams();
-  const { signUp } = useAuth();
-  const [role, setRole] = useState<UserRole>(
-    (params.get("role") as UserRole) || "patient"
-  );
+  // Self-registration always creates a PATIENT account. No role is sent to
+  // Supabase; the database signup trigger sets role = 'patient'.
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [sentTo, setSentTo] = useState<string | null>(null);
+  const [redirecting, setRedirecting] = useState(false);
 
-  const submit = (e: React.FormEvent) => {
+  const validate = (): string | null => {
+    const trimmedName = name.trim();
+    if (!trimmedName) return "Enter your full name.";
+    if (trimmedName.length > 100) return "Full name must be 100 characters or fewer.";
+    if (!EMAIL_PATTERN.test(email.trim())) return "Enter a valid email address.";
+    if (password.length < MIN_PASSWORD_LENGTH) {
+      return `Password must be at least ${MIN_PASSWORD_LENGTH} characters.`;
+    }
+    if (password !== confirmPassword) return "Passwords don't match.";
+    return null;
+  };
+
+  const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    if (password.length < 8) {
-      setError("Password must be at least 8 characters.");
+    const problem = validate();
+    if (problem) {
+      setError(problem);
       return;
     }
     setLoading(true);
-    setTimeout(() => {
-      const res = signUp({ name, email, password, role });
-      setLoading(false);
-      if (!res.ok) {
-        setError(res.error ?? "Sign up failed.");
+    const trimmedEmail = email.trim();
+    try {
+      const { data, error: authError } = await createClient().auth.signUp({
+        email: trimmedEmail,
+        password,
+        options: {
+          data: { full_name: name.trim() },
+          emailRedirectTo: `${window.location.origin}/auth/confirm?next=${encodeURIComponent(
+            DEFAULT_AFTER_SIGN_IN
+          )}`,
+        },
+      });
+      if (authError) {
+        setError(describeAuthError(authError, "Registration failed. Please try again."));
+        setLoading(false);
         return;
       }
-      router.push(ROLE_DASHBOARDS[role]);
-    }, 400);
+      if (data.session) {
+        // Email confirmation is off: already signed in.
+        setRedirecting(true);
+        window.location.assign(DEFAULT_AFTER_SIGN_IN);
+        return;
+      }
+      // Email confirmation is on: no session until the link is opened.
+      setPassword("");
+      setConfirmPassword("");
+      setSentTo(trimmedEmail);
+      setLoading(false);
+    } catch {
+      setError(NETWORK_ERROR_MESSAGE);
+      setLoading(false);
+    }
   };
 
   return (
@@ -157,112 +183,138 @@ function SignUpForm() {
             Join South Africa&apos;s national health network.
           </p>
 
-          {/* Role selector */}
-          <div className="mt-6">
-            <label className="mb-2 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              I am a…
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              {ROLES.map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  onClick={() => setRole(r.id)}
-                  className={cn(
-                    "flex items-center gap-2.5 rounded-xl border p-3 text-left transition-all",
-                    role === r.id
-                      ? "border-medical bg-medical/10 ring-1 ring-medical/30"
-                      : "border-border bg-card/40 hover:border-medical/40"
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "grid h-8 w-8 place-items-center rounded-lg",
-                      role === r.id
-                        ? "bg-medical text-white"
-                        : "bg-foreground/5 text-muted-foreground"
-                    )}
-                  >
-                    <r.icon className="h-4 w-4" />
-                  </span>
-                  <div>
-                    <div className="text-sm font-semibold">{r.label}</div>
-                    <div className="text-[0.7rem] text-muted-foreground">
-                      {r.desc}
-                    </div>
-                  </div>
-                </button>
-              ))}
+          {/* Self-registration is patient-only */}
+          <div className="mt-6 flex items-start gap-2.5 rounded-xl border border-medical/30 bg-medical/10 p-3">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-medical text-white">
+              <HeartPulse className="h-4 w-4" />
+            </span>
+            <div>
+              <div className="text-sm font-semibold">Patient account</div>
+              <div className="text-[0.7rem] text-muted-foreground">
+                Doctor, hospital and pharmacy accounts are set up by MedLink SA
+                administrators.
+              </div>
             </div>
           </div>
 
           {error && (
-            <div className="mt-6 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3.5 py-3 text-sm text-rose-500">
+            <div
+              role="alert"
+              className="mt-6 flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10 px-3.5 py-3 text-sm text-rose-500"
+            >
               <AlertCircle className="h-4 w-4 shrink-0" />
               {error}
             </div>
           )}
 
-          <form onSubmit={submit} className="mt-6 space-y-4">
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Full name
-              </label>
-              <div className="input-premium flex h-11 items-center gap-2 px-3.5">
-                <UserIcon className="h-4 w-4 text-muted-foreground" />
-                <input
-                  required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="Thandiwe Mokoena"
-                  className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Email
-              </label>
-              <div className="input-premium flex h-11 items-center gap-2 px-3.5">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <input
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="you@example.com"
-                  className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Password
-              </label>
-              <div className="input-premium flex h-11 items-center gap-2 px-3.5">
-                <Lock className="h-4 w-4 text-muted-foreground" />
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="At least 8 characters"
-                  className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-                />
-              </div>
-            </div>
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="btn-primary flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold disabled:opacity-60"
+          {sentTo ? (
+            <div
+              role="status"
+              className="mt-6 rounded-xl border border-emerald-500/30 bg-emerald-500/10 p-4 text-sm"
             >
-              {loading ? "Creating account…" : "Create account"}
-              {!loading && <ArrowRight className="h-4 w-4" />}
-            </button>
-          </form>
+              <div className="flex items-center gap-2 font-semibold text-emerald-500">
+                <MailCheck className="h-4 w-4 shrink-0" />
+                Check your email
+              </div>
+              <p className="mt-2 text-muted-foreground">
+                We sent a confirmation link to{" "}
+                <span className="font-semibold text-foreground">{sentTo}</span>.
+                Open it in this browser to activate your account. If you already
+                have an account, just sign in.
+              </p>
+              <p className="mt-2 text-xs text-muted-foreground">
+                Nothing there? Check your spam folder, or wait a minute and register
+                again to resend it.
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={submit} noValidate className="mt-6 space-y-4">
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Full name
+                </label>
+                <div className="input-premium flex h-11 items-center gap-2 px-3.5">
+                  <UserIcon className="h-4 w-4 text-muted-foreground" />
+                  <input
+                    required
+                    maxLength={100}
+                    autoComplete="name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="Thandiwe Mokoena"
+                    className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Email
+                </label>
+                <div className="input-premium flex h-11 items-center gap-2 px-3.5">
+                  <Mail className="h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="email"
+                    required
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="you@example.com"
+                    className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Password
+                </label>
+                <div className="input-premium flex h-11 items-center gap-2 px-3.5">
+                  <Lock className="h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="password"
+                    required
+                    autoComplete="new-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="At least 8 characters"
+                    className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                  Confirm password
+                </label>
+                <div className="input-premium flex h-11 items-center gap-2 px-3.5">
+                  <Lock className="h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="password"
+                    required
+                    autoComplete="new-password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Repeat your password"
+                    className="h-full w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || redirecting}
+                className="btn-primary flex h-11 w-full items-center justify-center gap-2 rounded-xl text-sm font-semibold disabled:opacity-60"
+              >
+                {redirecting
+                  ? "Account created. Opening your dashboard…"
+                  : loading
+                    ? "Creating account…"
+                    : "Create account"}
+                {!loading && !redirecting && <ArrowRight className="h-4 w-4" />}
+              </button>
+              </form>
+          )}
 
           <p className="mt-8 text-center text-sm text-muted-foreground">
             Already have an account?{" "}

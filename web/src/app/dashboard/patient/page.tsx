@@ -2391,7 +2391,6 @@ function Paperclip() {
    SETTINGS VIEW
    ========================================================================= */
 function SettingsView({ user, updateUser, signOut }: { user: any; updateUser: (p: any) => void; signOut: () => void }) {
-  const router = useRouter();
   const [form, setForm] = useState({
     name: user?.name ?? "",
     email: user?.email ?? "",
@@ -2512,10 +2511,7 @@ function SettingsView({ user, updateUser, signOut }: { user: any; updateUser: (p
           </Button>
           <Button
             variant="outline"
-            onClick={() => {
-              signOut();
-              router.push("/");
-            }}
+            onClick={() => signOut()}
             className="gap-2 rounded-xl"
           >
             <LogOut className="h-4 w-4" /> Sign out
