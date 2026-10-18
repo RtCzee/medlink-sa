@@ -40,7 +40,7 @@ medlink-sa/
     │   ├── hooks/
     │   ├── lib/               # data.ts (mock data), db.ts (Prisma client), auth-context.tsx, lang-context.tsx, security.ts, utils.ts
     │   └── types/
-    ├── next.config.ts
+    ├── next.config.mjs
     ├── tailwind.config.ts
     ├── tsconfig.json
     └── package.json
@@ -126,7 +126,7 @@ See `mobile/README.md` for details.
 
 ## Deployment
 
-> The build uses `next build --webpack` (not Turbopack). `web/next.config.ts` includes a `framer-motion` CJS alias needed for webpack bundling.
+> The build uses `next build --webpack` (not Turbopack). `web/next.config.mjs` includes a `framer-motion` CJS alias needed for webpack bundling.
 
 ### Vercel
 
