@@ -1,32 +1,253 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
-// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// MedLink SA database schema (PostgreSQL, hosted on Supabase).
+//
+// - profiles.id equals auth.users.id (Supabase Auth). The signup/delete triggers
+//   on auth.users and the RLS policies live in the hand-written migration
+//   prisma/migrations/*_supabase_auth_rls (Prisma does not manage the auth schema).
+//   There is deliberately no cross-schema FK to auth.users (it breaks Prisma
+//   introspection with P4002); the triggers keep profiles in sync instead.
+// - The same migration adds CHECK constraints and a BEFORE UPDATE trigger that sets
+//   updated_at = now() on every table (Prisma's @updatedAt still sets it from the client).
+// - Text length limits mirror the Android app's input limits (MainActivity.kt).
+// - Tables/columns are snake_case in Postgres, camelCase in Prisma Client.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Pooled connection (Supabase pooler, transaction mode, port 6543) used at runtime.
+  url       = env("DATABASE_URL")
+  // Direct/session connection (port 5432) used by Prisma Migrate.
+  directUrl = env("DIRECT_URL")
 }
 
-model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String?
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+// ─── Enums ──────────────────────────────────────────────────
+
+enum UserRole {
+  patient
+  doctor
+  pharmacy
+  hospital
+  admin
+
+  @@map("user_role")
 }
 
-model Post {
-  id        String   @id @default(cuid())
-  title     String
-  content   String?
-  published Boolean  @default(false)
-  authorId  String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+enum FacilityType {
+  hospital
+  clinic
+  community_health_centre
+  pharmacy
+
+  @@map("facility_type")
+}
+
+/// Android currently stores "Requested" for new appointment requests.
+enum AppointmentStatus {
+  requested
+  confirmed
+  completed
+  cancelled
+
+  @@map("appointment_status")
+}
+
+enum QueueTicketStatus {
+  waiting
+  called
+  served
+  cancelled
+
+  @@map("queue_ticket_status")
+}
+
+/// en = English, zu = isiZulu, af = Afrikaans, st = Sesotho (matches the web language switcher).
+enum AppLanguage {
+  en
+  zu
+  af
+  st
+
+  @@map("app_language")
+}
+
+enum AppTheme {
+  system
+  light
+  dark
+
+  @@map("app_theme")
+}
+
+// ─── Accounts ───────────────────────────────────────────────
+
+/// One row per Supabase Auth user. id = auth.users.id (no default; created by the signup trigger).
+/// email is a copy of auth.users.email kept in sync by triggers. It is deliberately NOT unique:
+/// Supabase Auth owns email uniqueness, and a unique copy here could block signups.
+model Profile {
+  id        String   @id @db.Uuid
+  fullName  String   @default("") @map("full_name") @db.VarChar(100)
+  email     String?  @db.VarChar(254)
+  phone     String?  @db.VarChar(32)
+  role      UserRole @default(patient)
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  emergencyProfile EmergencyProfile?
+  settings         UserSettings?
+  practitioner     Practitioner?
+  appointments     Appointment[]
+  medicalRecords   MedicalRecord[]
+  queueTickets     QueueTicket[]
+
+  @@index([role])
+  @@index([email])
+  @@map("profiles")
+}
+
+/// Emergency medical details shown on the patient's QR medical ID (Android Profile settings).
+model EmergencyProfile {
+  patientId             String   @id @map("patient_id") @db.Uuid
+  bloodType             String?  @map("blood_type") @db.VarChar(20)
+  allergies             String?  @db.VarChar(250)
+  conditions            String?  @db.VarChar(250)
+  emergencyContactName  String?  @map("emergency_contact_name") @db.VarChar(100)
+  emergencyContactPhone String?  @map("emergency_contact_phone") @db.VarChar(32)
+  createdAt             DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient Profile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@map("emergency_profiles")
+}
+
+model UserSettings {
+  userId               String      @id @map("user_id") @db.Uuid
+  language             AppLanguage @default(en)
+  theme                AppTheme    @default(system)
+  notificationsEnabled Boolean     @default(true) @map("notifications_enabled")
+  showEmergencyQr      Boolean     @default(true) @map("show_emergency_qr")
+  createdAt            DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime    @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("user_settings")
+}
+
+// ─── Directory (public read) ────────────────────────────────
+
+model Facility {
+  id        String       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name      String       @db.VarChar(150)
+  type      FacilityType
+  province  String       @db.VarChar(50)
+  city      String       @db.VarChar(100)
+  address   String?      @db.VarChar(250)
+  phone     String?      @db.VarChar(32)
+  /// CHECK -90..90 (supabase_auth_rls migration; Prisma 6 cannot model CHECK constraints).
+  latitude  Decimal?     @db.Decimal(9, 6)
+  /// CHECK -180..180 (supabase_auth_rls migration).
+  longitude Decimal?     @db.Decimal(9, 6)
+  createdAt DateTime     @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime     @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  practitioners Practitioner[]
+  appointments  Appointment[]
+  queueTickets  QueueTicket[]
+
+  @@index([type])
+  @@index([province])
+  @@map("facilities")
+}
+
+model Practitioner {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Optional link to a login account (doctors seeded without an account have none).
+  profileId     String?  @unique @map("profile_id") @db.Uuid
+  fullName      String   @map("full_name") @db.VarChar(100)
+  specialty     String   @db.VarChar(100)
+  facilityId    String?  @map("facility_id") @db.Uuid
+  licenseNumber String   @unique @map("license_number") @db.VarChar(30)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt     DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  profile      Profile?      @relation(fields: [profileId], references: [id], onDelete: SetNull)
+  facility     Facility?     @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+  appointments Appointment[]
+
+  @@index([facilityId])
+  @@index([specialty])
+  @@map("practitioners")
+}
+
+// ─── Patient-owned data ─────────────────────────────────────
+
+/// Free-text practitioner/facility fields match the Android Care form; the FK ids are optional links.
+model Appointment {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId        String            @map("patient_id") @db.Uuid
+  practitionerId   String?           @map("practitioner_id") @db.Uuid
+  practitionerName String            @map("practitioner_name") @db.VarChar(100)
+  specialty        String            @db.VarChar(100)
+  facilityId       String?           @map("facility_id") @db.Uuid
+  facilityName     String            @map("facility_name") @db.VarChar(150)
+  scheduledAt      DateTime          @map("scheduled_at") @db.Timestamptz(6)
+  reason           String?           @db.VarChar(500)
+  status           AppointmentStatus @default(requested)
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient      Profile       @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
+  facility     Facility?     @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+
+  @@index([patientId, scheduledAt])
+  @@index([practitionerId])
+  @@index([facilityId])
+  @@map("appointments")
+}
+
+/// Fields match the Android Records screen (title, record type, provider, record date, notes).
+model MedicalRecord {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId  String   @map("patient_id") @db.Uuid
+  title      String   @db.VarChar(120)
+  category   String   @db.VarChar(80)
+  provider   String?  @db.VarChar(150)
+  recordedOn DateTime @map("recorded_on") @db.Date
+  notes      String?  @db.VarChar(2000)
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt  DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient Profile @relation(fields: [patientId], references: [id], onDelete: Cascade)
+
+  @@index([patientId, recordedOn])
+  @@map("medical_records")
+}
+
+model QueueTicket {
+  id               String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId        String            @map("patient_id") @db.Uuid
+  facilityId       String            @map("facility_id") @db.Uuid
+  /// Calendar day the ticket is valid for (set explicitly by the API in Africa/Johannesburg time).
+  serviceDate      DateTime          @map("service_date") @db.Date
+  /// CHECK > 0 (supabase_auth_rls migration).
+  ticketNumber     Int               @map("ticket_number")
+  status           QueueTicketStatus @default(waiting)
+  issuedAt         DateTime          @default(now()) @map("issued_at") @db.Timestamptz(6)
+  /// CHECK >= 0 (supabase_auth_rls migration).
+  estimatedWaitMin Int?              @map("estimated_wait_min")
+  createdAt        DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime          @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient  Profile  @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  /// Restrict: a facility with ticket history cannot be deleted by accident.
+  facility Facility @relation(fields: [facilityId], references: [id], onDelete: Restrict)
+
+  @@unique([facilityId, serviceDate, ticketNumber])
+  @@index([patientId, status])
+  @@index([facilityId, serviceDate, status])
+  @@map("queue_tickets")
 }
