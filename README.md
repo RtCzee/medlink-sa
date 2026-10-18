@@ -67,10 +67,12 @@ medlink-sa/
 ```bash
 git clone https://github.com/RtCzee/medlink-sa.git
 cd medlink-sa/web
-npm ci
+npm install
 ```
 
 All web commands below are run from the `web/` folder.
+
+> `npm ci` currently fails: the committed `package-lock.json` is missing optional platform packages (e.g. `@parcel/watcher-*`, `@swc/core-*`), so `npm install` rewrites it. Use `npm install` for now. The Dockerfile example below uses `npm ci` and will hit the same error until the lockfile is regenerated and committed.
 
 ### 2. Start the dev server
 
