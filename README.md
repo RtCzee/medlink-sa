@@ -11,49 +11,40 @@ A digital health platform built for South Africa — connecting patients, doctor
 | Styling | Tailwind CSS v4 + shadcn/ui |
 | Animations | Framer Motion |
 | Charts | Recharts |
-| Auth | NextAuth.js v4 |
+| Auth | Client-side demo login (NextAuth.js v4 installed, not yet used) |
 | ORM | Prisma 6 |
-| Database | PostgreSQL |
+| Database | Prisma schema present (sqlite placeholder), not used by the app yet |
 | Fonts | Inter + JetBrains Mono |
 
 ## Project Structure
 
 ```
 medlink-sa/
-├── prisma/
-│   ├── schema.prisma          # Database schema (PostgreSQL)
-│   └── seed.ts                # Seed script
-├── src/
-│   ├── app/
-│   │   ├── layout.tsx         # Root layout (providers)
-│   │   ├── page.tsx           # Landing page
-│   │   ├── sign-in/           # Auth pages
-│   │   ├── sign-up/
-│   │   ├── service/           # Service overview
-│   │   ├── explore/           # Medicine explorer
-│   │   ├── faq/               # FAQ page
-│   │   └── dashboard/
-│   │       ├── patient/       # Patient dashboard (13 sub-components)
-│   │       ├── doctor/        # Doctor dashboard (14 sub-components)
-│   │       ├── pharmacy/      # Pharmacy dashboard
-│   │       ├── hospital/      # Hospital dashboard
-│   │       └── admin/         # Admin dashboard
-│   ├── components/
-│   │   ├── ui/                # shadcn/ui primitives
-│   │   ├── layout/            # Navbar, footer, dashboard shell
-│   │   └── landing/           # Landing page sections
-│   └── lib/
-│       ├── data.ts            # Mock data (medicines, testimonials, etc.)
-│       ├── db.ts              # Prisma client singleton
-│       ├── utils.ts           # cn() + getInitials()
-│       ├── auth-context.tsx   # Auth provider & User type
-│       ├── lang-context.tsx   # Language context (EN/ZU/AF/ST)
-│       └── services/          # Service modules (admin, doctor, etc.)
-├── next.config.mjs
-├── tailwind.config.ts
-└── package.json
+├── mobile/                    # Android app (Kotlin + Jetpack Compose), see mobile/README.md
+└── web/                       # Next.js website (everything below runs from here)
+    ├── prisma/
+    │   └── schema.prisma      # Prisma schema (currently a sqlite placeholder: User, Post)
+    ├── public/                # Static assets
+    ├── src/
+    │   ├── app/
+    │   │   ├── layout.tsx     # Root layout (providers)
+    │   │   ├── page.tsx       # Landing page
+    │   │   ├── api/route.ts   # GET /api stub ("Hello, world!")
+    │   │   ├── sign-in/       # Auth pages
+    │   │   ├── sign-up/
+    │   │   ├── service/       # Service overview
+    │   │   ├── explore/       # Medicine explorer
+    │   │   ├── faq/           # FAQ page
+    │   │   └── dashboard/     # patient, doctor, pharmacy, hospital, admin
+    │   ├── components/        # ui/ (shadcn), layout/, landing/
+    │   ├── hooks/
+    │   ├── lib/               # data.ts (mock data), db.ts (Prisma client), auth-context.tsx, lang-context.tsx, security.ts, utils.ts
+    │   └── types/
+    ├── next.config.ts
+    ├── tailwind.config.ts
+    ├── tsconfig.json
+    └── package.json
 ```
-
 ## User Roles
 
 | Role | Dashboard | What they can do |
@@ -68,137 +59,84 @@ medlink-sa/
 
 ### What you'll need
 
-- **Node.js** 18+ (20 recommended)
-- **PostgreSQL** 14+ (local or hosted)
-- **npm**, **yarn**, or **pnpm**
+- **Node.js** 20+ and **npm**
+- For the Android app: Android Studio (JDK 17+, Android SDK Platform 35)
 
 ### 1. Clone and install
 
 ```bash
-git clone https://github.com/D34THC0N3/medlink-sa.git
-cd medlink-sa
-npm install
+git clone https://github.com/RtCzee/medlink-sa.git
+cd medlink-sa/web
+npm ci
 ```
 
-### 2. Set up environment variables
+All web commands below are run from the `web/` folder.
 
-```bash
-cp .env.example .env
-```
-
-You'll need to fill in these values:
-
-```env
-DATABASE_URL="postgresql://user:password@localhost:5432/medlink_sa?schema=public"
-NEXTAUTH_URL="http://localhost:3000"
-NEXTAUTH_SECRET="replace-with-a-random-secret-at-least-32-chars"
-```
-
-Quick way to generate a secret:
-
-```bash
-openssl rand -base64 32
-```
-
-### 3. Set up the database
-
-Pick whichever option works best for you:
-
-#### Option A: Supabase (free hosted PostgreSQL)
-
-1. Create a free project at [supabase.com](https://supabase.com)
-2. Go to **Settings → Database** and copy the connection string (use the **URI** format)
-3. Paste it as your `DATABASE_URL`
-4. Run:
-
-```bash
-npx prisma db push
-npx prisma generate
-```
-
-#### Option B: Local PostgreSQL
-
-1. Install PostgreSQL (via [postgres.app](https://postgresapp.com), [brew](https://brew.sh), or your package manager)
-2. Create a database:
-
-```bash
-createdb medlink_sa
-```
-
-3. Set `DATABASE_URL` to `postgresql://localhost:5432/medlink_sa`
-4. Run:
-
-```bash
-npx prisma db push
-npx prisma generate
-```
-
-#### Option C: Docker
-
-```bash
-docker run -d --name medlink-pg \
-  -e POSTGRES_USER=medlink \
-  -e POSTGRES_PASSWORD=medlink \
-  -e POSTGRES_DB=medlink_sa \
-  -p 5432:5432 \
-  postgres:16-alpine
-```
-
-Then set:
-
-```env
-DATABASE_URL="postgresql://medlink:medlink@localhost:5432/medlink_sa?schema=public"
-```
-
-### 4. Seed the database (optional)
-
-```bash
-npx tsx prisma/seed.ts
-```
-
-### 5. Start the dev server
+### 2. Start the dev server
 
 ```bash
 npm run dev
 ```
 
-Head to [http://localhost:3000](http://localhost:3000) and you're good to go.
+Head to [http://localhost:3000](http://localhost:3000). Login is a demo: the test accounts shown on the sign-in page (password `12345678`) are hard-coded in `web/src/lib/auth-context.tsx`, and dashboards use mock data.
+
+### 3. Database (optional, not used by the app yet)
+
+`web/prisma/schema.prisma` currently uses the `sqlite` provider with placeholder `User` and `Post` models, and no app code reads or writes the database. To work with it, set `DATABASE_URL` (in your shell or in `web/.env`, which is git-ignored), then run:
+
+```bash
+# web/.env
+DATABASE_URL="file:./dev.db"
+```
+
+```bash
+npm run db:push
+npm run db:generate
+```
+
+There is no seed script and there are no migrations yet.
 
 ## Available Scripts
+
+Run from `web/`:
 
 | Command | What it does |
 |---------|--------------|
 | `npm run dev` | Start dev server on port 3000 |
-| `npm run build` | Production build (webpack) |
+| `npm run build` | Production build (`next build --webpack`, standalone output) |
 | `npm run start` | Start production server |
 | `npm run lint` | Run ESLint |
-| `npm run db:push` | Push schema to database |
+| `npm run db:push` | Push Prisma schema to the database |
 | `npm run db:generate` | Generate Prisma client |
 | `npm run db:migrate` | Run dev migration |
 | `npm run db:reset` | Reset database and re-run migrations |
-| `npm run db:seed` | Seed database with test data |
+
+There are no automated tests yet.
+
+## Mobile app
+
+The Android app lives in `mobile/`. Open that folder in Android Studio and run the `app` configuration, or build from the command line:
+
+```bash
+cd mobile
+./gradlew assembleDebug      # Windows: gradlew.bat assembleDebug
+```
+
+See `mobile/README.md` for details.
 
 ## Deployment
 
-### Vercel (easiest)
+> The build uses `next build --webpack` (not Turbopack). `web/next.config.ts` includes a `framer-motion` CJS alias needed for webpack bundling.
 
-Push to `main` and Vercel handles the rest:
+### Vercel
 
-1. Connect your GitHub repo at [vercel.com](https://vercel.com)
-2. Set these environment variables in the Vercel dashboard:
-   - `DATABASE_URL` — use a hosted PostgreSQL (Supabase, Neon, Railway, etc.)
-   - `NEXTAUTH_URL` — your production URL (e.g. `https://medlink-sa.vercel.app`)
-   - `NEXTAUTH_SECRET` — a strong random string
-3. Deploy. Vercel runs `next build --webpack` automatically.
+1. Connect the GitHub repo at [vercel.com](https://vercel.com) and set the project **Root Directory** to `web`.
+2. Deploy. Vercel runs `npm run build`.
 
-> **Heads up:** The build uses `next build --webpack` (not Turbopack). Turbopack has Windows/SWC compatibility issues. The `next.config.mjs` includes a `framer-motion` CJS alias needed for webpack bundling.
-
-### Self-hosted / Docker
-
-The project outputs a standalone build you can run anywhere:
+### Self-hosted (standalone build)
 
 ```bash
-# Build
+cd web
 npm run build
 
 # Copy static assets into the standalone folder
@@ -209,7 +147,7 @@ cp -r public .next/standalone/public
 node .next/standalone/server.js
 ```
 
-#### Dockerfile example
+#### Dockerfile example (build context: `web/`)
 
 ```dockerfile
 FROM node:20-alpine AS builder
@@ -230,45 +168,13 @@ EXPOSE 3000
 CMD ["node", "server.js"]
 ```
 
+Build it with `docker build -t medlink-sa-web web`.
+
 ### Railway / Render / Fly.io
 
-1. Connect your repo
-2. Set the same three env vars (`DATABASE_URL`, `NEXTAUTH_URL`, `NEXTAUTH_SECRET`)
-3. Build command: `npm run build`
-4. Start command: `npm run start`
-
-### Using a different database
-
-The Prisma schema is set up for PostgreSQL by default. To switch providers:
-
-1. Change `provider` in `prisma/schema.prisma`:
-
-```prisma
-datasource db {
-  provider = "mysql"  // or "sqlite"
-  url      = env("DATABASE_URL")
-}
-```
-
-2. Update `DATABASE_URL`:
-
-```env
-# MySQL
-DATABASE_URL="mysql://user:password@localhost:3306/medlink_sa"
-
-# SQLite
-DATABASE_URL="file:./dev.db"
-```
-
-3. Re-run migrations:
-
-```bash
-npx prisma db push
-npx prisma generate
-```
-
-> **Note:** SQLite doesn't support some PostgreSQL features (enums, JSON columns). You may need to adjust the schema.
-
+1. Connect the repo and set the root/working directory to `web`
+2. Build command: `npm run build`
+3. Start command: `npm run start`
 ## Key Features
 
 - **Multi-role dashboards** — Patient, Doctor, Pharmacy, Hospital, and Admin each get their own workspace
@@ -286,6 +192,6 @@ npx prisma generate
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `NEXTAUTH_URL` | Yes | Base URL (e.g. `http://localhost:3000`) |
-| `NEXTAUTH_SECRET` | Yes | Random secret for session encryption |
+| `DATABASE_URL` | Only for the `db:*` scripts | Prisma connection string; must be a `file:` URL while the provider is `sqlite` |
+
+The web app doesn't read any other environment variables yet (`next-auth` is installed but not wired up). Keep `.env*` files out of git; they are ignored.
