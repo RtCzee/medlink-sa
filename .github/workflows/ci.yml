@@ -15,7 +15,7 @@ concurrency:
 
 jobs:
   web:
-    name: Web (Next.js build)
+    name: Web (tests, build, types, lint, contract)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -40,17 +40,43 @@ jobs:
           DATABASE_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
           DIRECT_URL: postgresql://placeholder:placeholder@localhost:5432/placeholder
 
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Unit tests (Vitest)
+        # DB integration tests skip themselves unless MEDLINK_DB_INTEGRATION=1.
+        run: npm test
+
       - name: Build
         run: npm run build
         env:
           NEXT_TELEMETRY_DISABLED: "1"
 
-      # Non-blocking: the codebase currently has 6 pre-existing
-      # react-hooks/set-state-in-effect lint errors. Remove
-      # continue-on-error once they are fixed.
-      - name: Lint (non-blocking)
-        run: npm run lint
-        continue-on-error: true
+      # Baseline-aware: the codebase has known pre-existing errors (tsc 15, eslint 6,
+      # all in UI pages). These steps print every error and fail only if the count
+      # goes ABOVE the baseline, so new errors are never hidden. Lower the numbers
+      # as the old errors are fixed.
+      - name: Type-check (fails above baseline of 15)
+        run: |
+          set +e
+          npx tsc --noEmit > "$RUNNER_TEMP/tsc.txt" 2>&1
+          set -e
+          cat "$RUNNER_TEMP/tsc.txt"
+          count=$(grep -c "error TS" "$RUNNER_TEMP/tsc.txt" || true)
+          echo "tsc errors: $count (baseline 15)"
+          test "$count" -le 15
+
+      - name: Lint (fails above baseline of 6 errors)
+        run: |
+          npx eslint . || true
+          npx eslint . --format json --output-file "$RUNNER_TEMP/eslint.json" || true
+          count=$(node -e "const r=require(process.argv[1]);console.log(r.reduce((n,f)=>n+f.errorCount,0))" "$RUNNER_TEMP/eslint.json")
+          echo "eslint errors: $count (baseline 6)"
+          test "$count" -le 6
+
+      - name: Validate OpenAPI contract
+        working-directory: api
+        run: npx --yes @redocly/cli@2 lint openapi/openapi.yaml
 
   android:
     name: Android (assembleDebug + unit tests)

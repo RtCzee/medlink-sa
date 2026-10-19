@@ -11,9 +11,9 @@ A digital health platform built for South Africa — connecting patients, doctor
 | Styling | Tailwind CSS v4 + shadcn/ui |
 | Animations | Framer Motion |
 | Charts | Recharts |
-| Auth | Client-side demo login (NextAuth.js v4 installed, not yet used) |
+| Auth | Supabase Auth (email/password); cookie session on the web, Bearer token from the Android app |
 | ORM | Prisma 6 |
-| Database | PostgreSQL (planned host: Supabase) via Prisma; schema and migrations present, not used by the app yet |
+| Database | PostgreSQL on Supabase via Prisma 6 (the Next.js API is the only writer); RLS on every table |
 | Fonts | Inter + JetBrains Mono |
 
 ## Project Structure
@@ -33,7 +33,7 @@ medlink-sa/
     │   ├── app/
     │   │   ├── layout.tsx     # Root layout (providers)
     │   │   ├── page.tsx       # Landing page
-    │   │   ├── api/           # JSON API: profile, settings, facilities, practitioners (+ GET /api stub)
+    │   │   ├── api/           # JSON API: profile, settings, facilities, practitioners, appointments, medical records, queues, prescriptions, medicines
     │   │   ├── sign-in/       # Auth pages
     │   │   ├── sign-up/
     │   │   ├── service/       # Service overview
@@ -42,7 +42,7 @@ medlink-sa/
     │   │   └── dashboard/     # patient, doctor, pharmacy, hospital, admin
     │   ├── components/        # ui/ (shadcn), layout/, landing/
     │   ├── hooks/
-    │   ├── lib/               # api/ (shared API code), data.ts (mock data), db.ts (Prisma client), auth-context.tsx, lang-context.tsx, security.ts, utils.ts
+    │   ├── lib/               # api/ (server API code), client/api.ts (browser API client), data.ts (mock data for demo-only screens), db.ts (Prisma client), auth-context.tsx, lang-context.tsx, security.ts, utils.ts
     │   └── types/
     ├── tests/                 # Vitest unit tests (mocked) + OpenAPI contract test
     ├── next.config.mjs
@@ -85,11 +85,11 @@ All web commands below are run from the `web/` folder.
 npm run dev
 ```
 
-Head to [http://localhost:3000](http://localhost:3000). Login is a demo: the test accounts shown on the sign-in page (password `12345678`) are hard-coded in `web/src/lib/auth-context.tsx`, and dashboards use mock data.
+Head to [http://localhost:3000](http://localhost:3000). Create an account on `/sign-up` (Supabase sends a confirmation email), confirm it, then sign in. New accounts are patients. The patient dashboard's appointments, records, prescriptions, queue and medicines tabs use the real API; the other dashboards and some patient tabs are still demo screens (see "Integration status").
 
-### 3. Database (PostgreSQL, not used by the app yet)
+### 3. Database (PostgreSQL on Supabase)
 
-The schema in `web/prisma/schema.prisma` targets PostgreSQL (planned host: Supabase). No app code reads or writes the database yet, there is no seed script, and the app runs without a database.
+The schema in `web/prisma/schema.prisma` targets PostgreSQL on Supabase. The Next.js API reads and writes it through Prisma. The only seeded data is the demo medicine directory (migration 4); facilities and practitioners have no seed yet (see "Known limitations").
 
 **Tables** (all keyed by UUID; `profiles.id` is the Supabase Auth user id):
 
@@ -177,10 +177,9 @@ GitHub Actions runs `.github/workflows/ci.yml` on every push and pull request to
 
 | Job | Runner | What it does |
 |-----|--------|--------------|
-| `web` | ubuntu-latest, Node 24 | `npm ci`, `npx prisma validate` (placeholder connection strings, no database) and `npm run build` in `web/`. `npm run lint` also runs but is **non-blocking** (`continue-on-error`) because of 6 existing `react-hooks/set-state-in-effect` errors. |
-| `android` | ubuntu-latest, Temurin JDK 21 | `./gradlew assembleDebug test` in `mobile/`, then uploads the debug APK as the `medlink-debug-apk` artifact |
+| `web` | ubuntu-latest, Node 24 | In `web/`: `npm ci`, `npx prisma validate` (placeholder connection strings), `npx prisma generate`, `npm test` (Vitest, mocked; the DB integration tests skip themselves), `npm run build`, then baseline-aware `tsc --noEmit` and ESLint (they print every error and fail only above the known baselines of 15 type errors and 6 lint errors, all pre-existing in UI pages), and Redocly lint of `api/openapi/openapi.yaml`. |
+| `android` | ubuntu-latest, Temurin JDK 21 | `./gradlew assembleDebug test` in `mobile/` (JVM unit tests for the API client, auth and formatting), then uploads the debug APK as the `medlink-debug-apk` artifact |
 
-CI does not run the web unit tests (`npm test`) yet. The Android app has no automated tests yet, so its `test` task currently has nothing to run.
 ## Mobile app
 
 The Android app lives in `mobile/`. Open that folder in Android Studio and run the `app` configuration, or build from the command line:
@@ -190,7 +189,7 @@ cd mobile
 ./gradlew assembleDebug      # Windows: gradlew.bat assembleDebug
 ```
 
-See `mobile/README.md` for details.
+To turn on the online features, give the build the server addresses (see `mobile/README.md`). Without them the app builds and runs fully offline, with the Online tab showing the demo queue. See `mobile/README.md` for details.
 
 ## Deployment
 
@@ -262,8 +261,80 @@ Build it with `docker build -t medlink-sa-web web`.
 |----------|----------|-------------|
 | `DATABASE_URL` | Only for the `db:*` scripts | Pooled PostgreSQL connection string (Supabase pooler, port 6543) |
 | `DIRECT_URL` | Only for the `db:*` scripts | Supabase session pooler connection string (port 5432; the direct connection also works), used by migrations |
-| `NEXT_PUBLIC_SUPABASE_URL` | Not yet | Supabase project URL (planned) |
-| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Not yet | Supabase publishable key, safe in the browser/app (planned) |
-| `SUPABASE_SECRET_KEY` | Not yet | Supabase secret key: **server-only**, never expose to the browser or the Android app (planned) |
+| `NEXT_PUBLIC_SUPABASE_URL` | Yes | Supabase project URL (browser and server) |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Yes | Supabase publishable key; designed to be public (browser and Android app) |
+| `SUPABASE_SECRET_KEY` | No | Not read by any code. **Server-only** if ever used; never put it in the browser or the Android app |
+| `DATABASE_URL` / `DIRECT_URL` | Yes (server) | As above. Needed at runtime by the API, so a deployment must set them |
 
-The web app doesn't read any of these yet (`next-auth` is installed but not wired up). `web/.env.example` lists them with placeholder values. Keep real `.env*` files out of git; they are ignored (only `.env.example` is tracked).
+`web/.env.example` lists them with placeholder values. Keep real `.env*` files out of git; they are ignored (only `.env.example` is tracked). Android build properties are listed in `mobile/README.md`.
+
+## Architecture and auth
+
+```
+Android app (Kotlin/Compose)            Website (Next.js pages)
+  │ Supabase Auth REST (publishable key)   │ Supabase Auth (@supabase/ssr, cookies)
+  │ → access token (JWT)                   │
+  │ Authorization: Bearer <token>          │ same-origin fetch with the session cookie
+  └──────────────┬─────────────────────────┘
+                 ▼
+     Next.js route handlers  web/src/app/api/*   (proxy.ts refreshes cookie sessions)
+       · verify the user with Supabase Auth (cookie or Bearer)
+       · Zod-validate input, filter every query by the signed-in patient
+       · {data, meta} / {error:{code,message}, requestId} envelopes
+                 ▼
+     Prisma 6 → PostgreSQL (Supabase)   RLS on every table guards the Supabase Data API
+```
+
+- **One identity:** `profiles.id` = Supabase `auth.users.id`. A database trigger creates the profile (role `patient`) on sign-up.
+- **Web:** pages call `/api/*` through `web/src/lib/client/api.ts` (no tokens in JavaScript, nothing stored in `localStorage` except the language choice and the client-side security log). A 401 shows "session expired" with a sign-in link that returns to the dashboard.
+- **Android:** `mobile/app/src/main/java/com/medlink/mobile/api/` signs in against Supabase Auth with the publishable key, keeps the session in app-private SharedPreferences, refreshes the access token before it expires, and calls the same `/api/*` routes with `Authorization: Bearer`. A rejected token signs the user out of the Online tab. Tokens and health data are never logged.
+- **Room (Android)** holds the separate *offline* local account, appointment reminders and personal notes. It is not a cache of the online data and does not sync; the Online tab never writes to Room and never fakes offline writes.
+- Prisma connects as the table owner (bypasses RLS), so ownership is enforced in every API query and covered by the mocked tests.
+
+## Integration status
+
+| Feature | Website | Android |
+| --- | --- | --- |
+| Sign-in / session / sign-out | Live (Supabase cookies, middleware refresh) | Online tab: live (Supabase token, refresh, sign-out). Offline account: Room only |
+| Sign-up | Live (`/sign-up`, email confirmation) | Not in the app; create the account on the website |
+| Profile and settings | API exists; dashboard settings form is still in-memory only | Room (offline profile) only |
+| Facilities / practitioners | Public API live; used by the booking dialog. Landing/explore pages still show demo data | Practitioners: live (booking). Map/hospital list: hard-coded demo |
+| Appointments (list, book, reschedule, cancel) | Live | Online tab: live. Care tab: Room reminders (local only) |
+| Medical records (read) | Live | Online tab: live (read). Records tab: Room personal notes |
+| Queues (list, join, my ticket, leave) | Live | Online tab: live |
+| Prescriptions and items (read) | Live | Online tab: live |
+| Medicines and prices | Live, prices labelled **demo** | Online tab: live, prices labelled **demo** |
+| Video consults, messages, ID verification, vitals, ordering, refills | Demo only | Not present |
+| Doctor / pharmacy / hospital / admin dashboards | Demo only (mock data) | Not present |
+
+## Demo data and known limitations
+
+- **No facilities or practitioners are in the database yet**, so booking and queues show their empty states until some are added. Adding them is a database write that needs the project owner's approval (an idempotent seed script is a planned change, not applied).
+- Medicine prices are demo sample data (`source = 'demo'`, effective 2026-10-19), not current prices, and are labelled as such everywhere.
+- No prescriber, dispensing, pharmacy-order, staff or admin workflows: prescriptions are read-only, there is no API to set appointment status beyond cancel, and queue tickets are never "called" by staff.
+- Telemedicine, messaging, ID verification and vitals are UI demos.
+- No deployed URL is configured in this repository. The Android app needs a reachable HTTPS base URL (or `http://10.0.2.2:3000` for the emulator against `npm run dev`; debug builds allow cleartext). Supabase Auth redirect URLs must include the deployed site's `/auth/confirm` for email confirmation.
+
+## How to demo
+
+**Website:** `cd web && npm run dev`, open `/sign-up`, confirm the email, sign in, then on the patient dashboard: Medicines (search, open a medicine, see the demo price labels), Appointments (book → appears in the list → reschedule → cancel), Queue (join a facility → ticket number and people ahead → leave), Records and Prescriptions (empty states unless data exists). Sign out from the dashboard.
+
+**Android phone (manual, not automated):**
+1. In `mobile/local.properties` set `medlink.apiBaseUrl` (deployed URL, or `http://<PC LAN IP>:3000` with `npm run dev -- -H 0.0.0.0` on the same Wi-Fi), `medlink.supabaseUrl` and `medlink.supabasePublishableKey`.
+2. `cd mobile && ./gradlew installDebug` with the phone connected (USB debugging on).
+3. Create the offline account on the start screen, sign in.
+4. Open the **Online** tab, sign in with the website account.
+5. Medicines → "Show demo prices"; Appointments → book, reschedule, cancel; Queue → join, leave; Records; Prescriptions → "Show items".
+6. Turn on airplane mode and retry: you should see "Could not reach MedLink…" with "Try again"; nothing is saved offline.
+7. Sign out from the Online tab.
+
+## Assignment evidence checklist
+
+Fill these in with real evidence; nothing here has been recorded for you.
+
+- [ ] DevOps lifecycle: plan → code → build → test → release → deploy → operate → monitor, with links to the commits, CI runs and (when it exists) the deployment
+- [ ] CI runs green on `main` (link the GitHub Actions runs; the web job runs tests, build, type-check, lint and contract validation; the Android job builds the APK and runs unit tests)
+- [ ] Team meeting notes / minutes and attendance
+- [ ] GitHub activity: issues, pull requests, reviews and commit history per member
+- [ ] Physical-phone demo: video or screenshots of the steps above on a real device (date and device model)
+- [ ] Deployed website URL and a working public endpoint check (e.g. `GET /api/medicines`)
