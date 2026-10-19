@@ -21,6 +21,11 @@ Conventions are in [`conventions.md`](conventions.md).
 | GET | `/api/medical-records` | Private |
 | POST | `/api/medical-records` | Private (patients) |
 | GET | `/api/medical-records/{id}` | Private |
+| GET | `/api/queues` | Private |
+| POST | `/api/queues/{id}/join` | Private (patients) |
+| GET | `/api/queue-tickets` | Private |
+| GET | `/api/queue-tickets/{id}` | Private |
+| POST | `/api/queue-tickets/{id}/leave` | Private |
 
 ## `GET /api/profile`
 
@@ -356,6 +361,68 @@ Content-Type: application/json
 
 `200 { "data": <record> }`. Another patient's record returns the same 404
 `MEDICAL_RECORD_NOT_FOUND` as a missing one. An invalid id or any query parameter is a 400.
+
+## Queues (private, patient scope)
+
+A **queue** is one facility's tickets for one day (the South African date,
+Africa/Johannesburg). There is no queue table: `queue_tickets` rows belong to a facility
+and a `service_date`, so the routes are `/api/queues` (facilities you can queue at today),
+`/api/queues/{facilityId}/join`, and `/api/queue-tickets*` for your own tickets.
+Responses are `Cache-Control: no-store`. Rules and concurrency:
+[conventions.md](conventions.md#queues-ticket-rules-and-concurrency).
+
+Ticket object:
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid | |
+| `facilityId`, `facilityName` | uuid, string | |
+| `serviceDate` | date `YYYY-MM-DD` | the day the ticket is for |
+| `ticketNumber` | integer >= 1 | unique per facility and day; never reused or changed |
+| `status` | `waiting` \| `called` \| `served` \| `cancelled` | |
+| `waitingAhead` | integer \| null | waiting tickets with a lower number at the same queue, counted now; null unless this ticket is waiting today. Not a time estimate |
+| `issuedAt`, `createdAt`, `updatedAt` | date-time | UTC |
+
+`patientId` and `estimatedWaitMin` are not returned (nothing maintains an estimate).
+
+### `GET /api/queues`
+
+Same query parameters, limits and order as `GET /api/facilities` (`page`, `pageSize`,
+`type`, `province`, `city`, `q`). Returns facilities as queues:
+`{ "id", "name", "type", "province", "city", "serviceDate" }`. No patient data, queue
+length or wait time. Every facility accepts tickets: the schema has no opening hours or
+open/closed flag.
+
+### `POST /api/queues/{id}/join`
+
+`{id}` is a facility id. No body, or `{}`; any field is a 400. Patients only (403 for
+other roles). Returns `201 { "data": <ticket> }` with the next number at that facility
+today and status `waiting`. 404 `FACILITY_NOT_FOUND` for an unknown facility; 409
+`QUEUE_TICKET_ACTIVE` if you already have a waiting or called ticket today (at any
+facility).
+
+```http
+POST /api/queues/3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f/join
+```
+
+### `GET /api/queue-tickets`
+
+| Query | Type | Rules |
+| --- | --- | --- |
+| `page`, `pageSize` | integer | default 1 / 20; max 1000 / 100 |
+| `status` | ticket status | exact |
+
+Ordered by `serviceDate` (newest first), then `issuedAt` (newest first), then `id`.
+
+### `GET /api/queue-tickets/{id}`
+
+`200 { "data": <ticket> }`. Another patient's ticket is the same 404
+`QUEUE_TICKET_NOT_FOUND` as a missing one.
+
+### `POST /api/queue-tickets/{id}/leave`
+
+No body, or `{}`. `waiting` or `called` (today) -> `cancelled`, 200. Already cancelled:
+200 unchanged. `served`, or a ticket for an earlier day: 409 `QUEUE_TICKET_NOT_LEAVABLE`.
 
 ## Manual live checks
 

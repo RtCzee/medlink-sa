@@ -13,6 +13,9 @@ export type ApiErrorCode =
   | "PRACTITIONER_NOT_FOUND"
   | "APPOINTMENT_NOT_FOUND"
   | "MEDICAL_RECORD_NOT_FOUND"
+  | "QUEUE_TICKET_NOT_FOUND"
+  | "QUEUE_TICKET_ACTIVE"
+  | "QUEUE_TICKET_NOT_LEAVABLE"
   | "CONFLICT"
   | "APPOINTMENT_CONFLICT"
   | "APPOINTMENT_NOT_EDITABLE"
@@ -89,3 +92,17 @@ export const appointmentNotCancellable = (message: string) =>
 /** Missing OR another patient's record: the same 404, so ids can't be probed. */
 export const medicalRecordNotFound = () =>
   new ApiError(404, "MEDICAL_RECORD_NOT_FOUND", "No medical record with that id was found.");
+
+/** Missing OR another patient's ticket: the same 404, so ids can't be probed. */
+export const queueTicketNotFound = () =>
+  new ApiError(404, "QUEUE_TICKET_NOT_FOUND", "No queue ticket with that id was found.");
+
+export const queueTicketActive = () =>
+  new ApiError(
+    409,
+    "QUEUE_TICKET_ACTIVE",
+    "You already have an active queue ticket today. Leave it before joining another queue."
+  );
+
+export const queueTicketNotLeavable = (message: string) =>
+  new ApiError(409, "QUEUE_TICKET_NOT_LEAVABLE", message);

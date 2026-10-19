@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MedLink SA API
-  version: 0.4.0
+  version: 0.5.0
   summary: JSON API served by the MedLink SA Next.js app (web/src/app/api).
   description: |
     Documents only the endpoints that are implemented. Conventions (envelope,
@@ -23,6 +23,12 @@ tags:
     description: |
       The signed-in user's own appointments (patient scope). Times are ISO 8601 instants:
       send them with an offset (SAST is +02:00, no DST); responses are UTC (`Z`).
+  - name: Queues
+    description: |
+      Virtual queues. A queue is one facility's tickets for one day (South African date,
+      Africa/Johannesburg); there is no separate queue object. Patients can join, see
+      and leave their own tickets. Calling, serving and reordering tickets are staff
+      operations and are not available. No wait-time estimates are provided.
   - name: MedicalRecords
     description: |
       The signed-in patient's own medical records. Records are patient-authored (the
@@ -644,6 +650,197 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
+  /api/queues:
+    get:
+      tags: [Queues]
+      operationId: listQueues
+      summary: List the queues I can join today
+      description: |
+        One queue per facility for today's South African date. Same filters and order as
+        `GET /api/facilities` (name, then id). No patient data, queue length or wait
+        estimate. Unknown or repeated query parameters are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/FacilityType" }
+        - name: province
+          in: query
+          description: Exact, case-sensitive match, e.g. `Gauteng`.
+          schema: { type: string, minLength: 1, maxLength: 50 }
+        - name: city
+          in: query
+          description: Case-insensitive exact match.
+          schema: { type: string, minLength: 1, maxLength: 100 }
+        - $ref: "#/components/parameters/NameSearch"
+      responses:
+        "200":
+          description: One page of queues.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Queue" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/queues/{id}/join:
+    post:
+      tags: [Queues]
+      operationId: joinQueue
+      summary: Join today's queue at a facility (patients only)
+      description: |
+        `id` is the facility id. Issues a ticket for the caller (from the session) for
+        today's South African date with the next ticket number at that facility; status
+        starts as `waiting`. No body, or `{}`; any field (patientId, status,
+        ticketNumber, position, timestamps...) is a 400. Only users whose profile role is
+        `patient` may join (403 otherwise). A patient can hold one active (waiting or
+        called) ticket per day across all facilities: a second join is a 409
+        QUEUE_TICKET_ACTIVE. Every facility accepts tickets (the schema has no opening
+        hours or open/closed flag).
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmptyBody" }
+      responses:
+        "201":
+          description: The new ticket.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/QueueTicket" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/QueueConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/queue-tickets:
+    get:
+      tags: [Queues]
+      operationId: listQueueTickets
+      summary: List my queue tickets
+      description: |
+        Only the caller's tickets. Ordered by serviceDate (newest first), then issuedAt
+        (newest first), then id. Unknown or repeated query parameters are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/QueueTicketStatus" }
+      responses:
+        "200":
+          description: One page of the caller's tickets.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/QueueTicket" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/queue-tickets/{id}:
+    get:
+      tags: [Queues]
+      operationId: getQueueTicket
+      summary: Get one of my queue tickets
+      description: Another patient's ticket returns the same 404 as a missing one. Query parameters are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The ticket.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/QueueTicket" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/queue-tickets/{id}/leave:
+    post:
+      tags: [Queues]
+      operationId: leaveQueue
+      summary: Leave a queue
+      description: |
+        A waiting or called ticket for today becomes `cancelled`. Leaving an
+        already-cancelled ticket returns it unchanged (200, safe to retry). A served
+        ticket, or one for an earlier day, is a 409 QUEUE_TICKET_NOT_LEAVABLE. Ticket
+        numbers are never changed. No body, or `{}`.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmptyBody" }
+      responses:
+        "200":
+          description: The ticket, now cancelled.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/QueueTicket" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/QueueConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
 components:
   securitySchemes:
     cookieSession:
@@ -742,6 +939,41 @@ components:
           format: date-time
           description: Same rules as creation. Only while the appointment is `requested`.
         reason: { type: [string, "null"], minLength: 1, maxLength: 500, description: Trimmed; null clears it. }
+    Queue:
+      type: object
+      required: [id, name, type, province, city, serviceDate]
+      properties:
+        id: { type: string, format: uuid, description: The facility id (use it to join). }
+        name: { type: string, maxLength: 150 }
+        type: { $ref: "#/components/schemas/FacilityType" }
+        province: { type: string, maxLength: 50 }
+        city: { type: string, maxLength: 100 }
+        serviceDate: { type: string, format: date, description: "Today's South African date: the day a ticket joined now is for." }
+    QueueTicketStatus:
+      type: string
+      enum: [waiting, called, served, cancelled]
+      description: New tickets are `waiting`. Patients can only leave (-> `cancelled`); `called` and `served` are set by staff, which this API doesn't offer.
+    QueueTicket:
+      type: object
+      required: [id, facilityId, facilityName, serviceDate, ticketNumber, status, waitingAhead, issuedAt, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        facilityId: { type: string, format: uuid }
+        facilityName: { type: string, maxLength: 150 }
+        serviceDate: { type: string, format: date, description: South African calendar date the ticket is for. }
+        ticketNumber: { type: integer, minimum: 1, description: Unique per facility and day; issued in order and never reused or changed. }
+        status: { $ref: "#/components/schemas/QueueTicketStatus" }
+        waitingAhead:
+          type: [integer, "null"]
+          minimum: 0
+          description: Waiting tickets with a lower number at the same facility and day, counted when the response is built. null unless this ticket is waiting today. Not a time estimate.
+        issuedAt: { type: string, format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    EmptyBody:
+      type: object
+      additionalProperties: false
+      description: No fields are accepted. The body may also be omitted.
     MedicalRecord:
       type: object
       required: [id, title, category, provider, recordedOn, notes, createdAt, updatedAt]
@@ -886,6 +1118,9 @@ components:
         - APPOINTMENT_NOT_EDITABLE
         - APPOINTMENT_NOT_CANCELLABLE
         - MEDICAL_RECORD_NOT_FOUND
+        - QUEUE_TICKET_NOT_FOUND
+        - QUEUE_TICKET_ACTIVE
+        - QUEUE_TICKET_NOT_LEAVABLE
         - UNSUPPORTED_MEDIA_TYPE
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -946,7 +1181,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
-      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND, PRACTITIONER_NOT_FOUND, APPOINTMENT_NOT_FOUND or MEDICAL_RECORD_NOT_FOUND.
+      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND, PRACTITIONER_NOT_FOUND, APPOINTMENT_NOT_FOUND, MEDICAL_RECORD_NOT_FOUND or QUEUE_TICKET_NOT_FOUND.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -964,6 +1199,13 @@ components:
               message: That time is not available with this practitioner. Choose another time.
               details: [{ path: scheduledAt, code: conflict, message: Time slot unavailable. }]
             requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f
+    QueueConflict:
+      description: |
+        QUEUE_TICKET_ACTIVE (you already have a waiting or called ticket today),
+        QUEUE_TICKET_NOT_LEAVABLE (served, or an earlier day's ticket) or CONFLICT.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
     UnsupportedMediaType:
       description: Write without Content-Type application/json.
       content:

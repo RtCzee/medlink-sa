@@ -19,6 +19,7 @@ const UNDOCUMENTED_ALLOWED = new Set(["/api"]);
 
 type Parameter = { name?: string; in?: string; $ref?: string };
 type Operation = {
+  operationId?: string;
   security?: unknown[];
   parameters?: Parameter[];
   responses?: Record<string, { headers?: Record<string, { $ref?: string }> }>;
@@ -142,5 +143,20 @@ describe("OpenAPI contract (static)", () => {
     const codes = [...union.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]).sort();
     expect(codes.length).toBeGreaterThan(0);
     expect([...(spec.components?.schemas?.ErrorCode?.enum ?? [])].sort()).toEqual(codes);
+  });
+
+  it("operationIds are present and unique", () => {
+    const ids = operations().map(([path, method, op]) => op.operationId ?? `${method} ${path} (missing)`);
+    expect(ids.every((id) => !id.endsWith("(missing)"))).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("private write operations document 403 (origin/role), 415 and 429", () => {
+    for (const [path, method, op] of operations()) {
+      if (op.security !== undefined || !["post", "patch", "put", "delete"].includes(method)) continue;
+      for (const status of ["403", "415", "429"]) {
+        expect(op.responses, `${method} ${path}`).toHaveProperty(status);
+      }
+    }
   });
 });

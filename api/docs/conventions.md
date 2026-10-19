@@ -51,11 +51,14 @@ Error (never with a 2xx status):
 | 404 | `PRACTITIONER_NOT_FOUND` | No practitioner with that id |
 | 404 | `APPOINTMENT_NOT_FOUND` | No appointment with that id **for you** (another patient's looks the same) |
 | 404 | `MEDICAL_RECORD_NOT_FOUND` | No medical record with that id **for you** (another patient's looks the same) |
+| 404 | `QUEUE_TICKET_NOT_FOUND` | No queue ticket with that id **for you** (another patient's looks the same) |
 | 404 | `NOT_FOUND` | Generic missing record |
 | 409 | `CONFLICT` | Unique-constraint conflict |
 | 409 | `APPOINTMENT_CONFLICT` | The practitioner, or you, already has an active appointment at that time |
 | 409 | `APPOINTMENT_NOT_EDITABLE` | The appointment can't be changed in its current state (or changed concurrently) |
 | 409 | `APPOINTMENT_NOT_CANCELLABLE` | The appointment is completed or its time has passed |
+| 409 | `QUEUE_TICKET_ACTIVE` | You already have a waiting or called queue ticket today |
+| 409 | `QUEUE_TICKET_NOT_LEAVABLE` | The ticket was served, or its day has passed |
 | 415 | `UNSUPPORTED_MEDIA_TYPE` | Write without `Content-Type: application/json` |
 | 429 | `RATE_LIMITED` | Too many writes; see `Retry-After` |
 | 500 | `INTERNAL_ERROR` | Unexpected error (generic message; details only in server logs) |
@@ -68,7 +71,8 @@ backfill.
 
 ## Authentication
 
-**Private endpoints** (`/api/profile`, `/api/settings`, `/api/appointments*`, `/api/medical-records*`) make exactly one Supabase Auth
+**Private endpoints** (`/api/profile`, `/api/settings`, `/api/appointments*`, `/api/medical-records*`,
+`/api/queues*`, `/api/queue-tickets*`) make exactly one Supabase Auth
 `getUser` call per request, which verifies the user with the Auth server (so revoked
 or deleted sessions are rejected).
 
@@ -97,7 +101,7 @@ the rules are enforced **in code**:
 
 - **Private data:** every query's `where` uses the verified session user id
   (`profiles.id`, `user_settings.user_id`, `appointments.patient_id`,
-  `medical_records.patient_id`), never a value
+  `medical_records.patient_id`, `queue_tickets.patient_id`), never a value
   from the request. Strict schemas reject any field that isn't explicitly editable.
   Appointment and medical-record lookups filter on id AND patient, so another
   patient's row is a 404, not a 403 (ids can't be probed). Medical records are
@@ -128,7 +132,7 @@ batched transaction (`prisma.$transaction([findMany, count])`).
 
 ## Rate limiting
 
-Write endpoints (PATCH, the appointment POSTs and `POST /api/medical-records`) allow 20 writes per user per minute
+Write endpoints (PATCH, the appointment POSTs, `POST /api/medical-records` and the queue join/leave) allow 20 writes per user per minute
 per endpoint group. The limiter is **in-memory and
 per server instance**: it is not shared between instances and resets on restart. It
 is a guard against loops and casual abuse, not a security boundary. Public GETs are not
@@ -146,8 +150,9 @@ query logging is off.
 
 `npm test` (in `web/`) runs MOCKED unit tests (Vitest). Supabase Auth and Prisma are
 mocked, so there's no network or database access. It also runs the OpenAPI contract
-test. `tests/appointments-locking.integration.test.ts` is an opt-in INTEGRATION test
-against a real database (read-only: advisory locks only); it is skipped unless
+test. `tests/appointments-locking.integration.test.ts` and
+`tests/queues-locking.integration.test.ts` are opt-in INTEGRATION tests
+against a real database (read-only: advisory locks only); they are skipped unless
 `MEDLINK_DB_INTEGRATION=1`. Live checks need a running server, real data and, for private endpoints, a real
 signed-in session (see `endpoints.md`).
 
@@ -209,3 +214,36 @@ so concurrent requests are checked one at a time. Limits:
   patient to change their own rows via the Data API.
 - `recordedOn` is a calendar date (`DATE`), sent and returned as `YYYY-MM-DD`; "today"
   for the not-in-the-future rule is the date in Africa/Johannesburg.
+
+## Queues: ticket rules and concurrency
+
+- A queue is a facility's tickets for one `service_date` (today in Africa/Johannesburg,
+  set by the API). Tickets are created only through this API: the Data API can only read
+  your own tickets (SELECT grant + RLS).
+- **One active ticket per patient** (README rule): active = `waiting` or `called` with
+  today's service date, across all facilities. A ticket left `waiting` on an earlier day
+  is no longer active (nothing expires it in the database) and can't be left.
+- **Numbering:** highest number at that facility today + 1, starting at 1. Numbers are
+  never reused or renumbered; order in the queue is by number. No position is stored;
+  `waitingAhead` is computed per response.
+- **Statuses:** new tickets get the database default `waiting`. Patients may only leave
+  (`waiting`/`called` today -> `cancelled`; repeat leave returns the ticket unchanged).
+  `called` and `served` are staff operations (call next, serve, reorder), which are not
+  implemented, so nothing currently moves a ticket past `waiting`.
+- **Not modelled:** priority, capacity, opening hours / open-closed, services within a
+  facility, appointment links and wait estimates (`estimated_wait_min` exists but
+  nothing maintains it, so it isn't returned). Every facility accepts tickets.
+- **Concurrency:** join runs in one transaction that takes two advisory locks,
+  `queues:facility:<id>:<day>` then `queues:patient:<id>`, then checks and inserts.
+  Leave takes only the patient lock and uses a guarded update. Join takes them in that
+  order and nothing takes them in reverse, so they can't deadlock.
+  - Same patient joining twice at once: serialised; one ticket, one 409.
+  - Different patients joining one queue: serialised; consecutive numbers. The
+    `(facility_id, service_date, ticket_number)` unique index is the database backstop
+    (a collision is a 409 `CONFLICT`, not a duplicate).
+  - Double leave: the row changes once; both calls return the cancelled ticket.
+  - Lock waits are bounded; a timeout is a retryable 503.
+  - **Limit:** the one-active-ticket rule is enforced by the API's locks, not by a
+    database constraint, so direct database writes (SQL editor, scripts) could bypass
+    it. A partial unique index would close that gap (see the M5 report); none is
+    applied.

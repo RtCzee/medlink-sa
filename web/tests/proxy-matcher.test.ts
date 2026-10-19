@@ -15,7 +15,7 @@ describe("proxy matcher", () => {
     (path) => expect(matcher.test(path)).toBe(false)
   );
 
-  it.each(["/", "/dashboard", "/dashboard/patient", "/sign-in", "/api/profile", "/api/settings", "/api/facilitiesx", "/api", "/api/appointments", "/api/appointments/abc", "/api/appointments/abc/cancel", "/api/medical-records", "/api/medical-records/abc"])(
+  it.each(["/", "/dashboard", "/dashboard/patient", "/sign-in", "/api/profile", "/api/settings", "/api/facilitiesx", "/api", "/api/appointments", "/api/appointments/abc", "/api/appointments/abc/cancel", "/api/medical-records", "/api/medical-records/abc", "/api/queues", "/api/queues/abc/join", "/api/queue-tickets", "/api/queue-tickets/abc", "/api/queue-tickets/abc/leave"])(
     "runs on %s",
     (path) => expect(matcher.test(path)).toBe(true)
   );
