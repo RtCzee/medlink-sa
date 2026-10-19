@@ -5,7 +5,7 @@ live in the Next.js app, not here:
 
 | What | Where |
 | --- | --- |
-| Route handlers | [`web/src/app/api/`](../web/src/app/api) (`profile`, `settings`, `facilities`, `practitioners`, `appointments`, `medical-records`, `queues`, `queue-tickets`, `prescriptions`) |
+| Route handlers | [`web/src/app/api/`](../web/src/app/api) (`profile`, `settings`, `facilities`, `practitioners`, `appointments`, `medical-records`, `queues`, `queue-tickets`, `prescriptions`, `medicines`) |
 | Shared API code (envelope, auth, validation, DTOs) | [`web/src/lib/api/`](../web/src/lib/api) |
 | Tests (Vitest, mocked) | [`web/tests/`](../web/tests) |
 | OpenAPI 3.1 contract | [`openapi/openapi.yaml`](openapi/openapi.yaml) |
@@ -34,7 +34,7 @@ npm run dev          # http://localhost:3000/api/...
   `/api/prescriptions*`): the Supabase session cookie from the
   web app, or `Authorization: Bearer <Supabase access token>`. A missing or invalid one
   gets a JSON 401.
-- **Public** (`/api/facilities*`, `/api/practitioners*`): no sign-in. A session, if
+- **Public** (`/api/facilities*`, `/api/practitioners*`, `/api/medicines*`): no sign-in. A session, if
   sent, is ignored and never read. This matches the database grants for the anon role.
 
 Details: [docs/conventions.md](docs/conventions.md).

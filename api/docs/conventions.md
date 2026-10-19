@@ -51,6 +51,7 @@ Error (never with a 2xx status):
 | 404 | `PRACTITIONER_NOT_FOUND` | No practitioner with that id |
 | 404 | `APPOINTMENT_NOT_FOUND` | No appointment with that id **for you** (another patient's looks the same) |
 | 404 | `MEDICAL_RECORD_NOT_FOUND` | No medical record with that id **for you** (another patient's looks the same) |
+| 404 | `MEDICINE_NOT_FOUND` | No active medicine with that id |
 | 404 | `PRESCRIPTION_NOT_FOUND` | No prescription with that id **for you** (another patient's looks the same) |
 | 404 | `QUEUE_TICKET_NOT_FOUND` | No queue ticket with that id **for you** (another patient's looks the same) |
 | 404 | `NOT_FOUND` | Generic missing record |
@@ -89,9 +90,9 @@ from the verified token, and roles come from `profiles.role` in the database.
 Unauthenticated calls get a JSON 401. `proxy.ts` only redirects `/dashboard*` pages
 to `/sign-in`; it never redirects `/api/*`.
 
-**Public endpoints** (`/api/facilities*`, `/api/practitioners*`) need no sign-in. This
+**Public endpoints** (`/api/facilities*`, `/api/practitioners*`, `/api/medicines*`) need no sign-in. This
 matches the database grants: `anon` can read all `facilities` columns and the
-practitioner directory columns. These routes never call `getUser` or read cookies. A
+practitioner directory columns, and (RLS) active medicines and their prices. These routes never call `getUser` or read cookies. A
 session, if sent, is ignored.
 
 ## Ownership, data exposure and RLS: important

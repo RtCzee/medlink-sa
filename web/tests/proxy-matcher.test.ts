@@ -10,12 +10,12 @@ import { config } from "@/proxy";
 const matcher = new RegExp(`^${config.matcher[0]}$`);
 
 describe("proxy matcher", () => {
-  it.each(["/api/facilities", "/api/facilities/abc", "/api/practitioners", "/api/practitioners/abc", "/_next/static/x.js", "/logo.svg"])(
+  it.each(["/api/facilities", "/api/facilities/abc", "/api/practitioners", "/api/practitioners/abc", "/api/medicines", "/api/medicines/abc", "/api/medicines/abc/prices", "/_next/static/x.js", "/logo.svg"])(
     "skips %s",
     (path) => expect(matcher.test(path)).toBe(false)
   );
 
-  it.each(["/", "/dashboard", "/dashboard/patient", "/sign-in", "/api/profile", "/api/settings", "/api/facilitiesx", "/api", "/api/appointments", "/api/appointments/abc", "/api/appointments/abc/cancel", "/api/medical-records", "/api/medical-records/abc", "/api/queues", "/api/queues/abc/join", "/api/queue-tickets", "/api/queue-tickets/abc", "/api/queue-tickets/abc/leave", "/api/prescriptions", "/api/prescriptions/abc"])(
+  it.each(["/", "/dashboard", "/dashboard/patient", "/sign-in", "/api/profile", "/api/settings", "/api/facilitiesx", "/api/medicinesx", "/api", "/api/appointments", "/api/appointments/abc", "/api/appointments/abc/cancel", "/api/medical-records", "/api/medical-records/abc", "/api/queues", "/api/queues/abc/join", "/api/queue-tickets", "/api/queue-tickets/abc", "/api/queue-tickets/abc/leave", "/api/prescriptions", "/api/prescriptions/abc"])(
     "runs on %s",
     (path) => expect(matcher.test(path)).toBe(true)
   );

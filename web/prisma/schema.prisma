@@ -318,3 +318,49 @@ model PrescriptionItem {
   @@index([prescriptionId])
   @@map("prescription_items")
 }
+
+// ─── Medicine directory (public) ────────────────────────────
+
+/// Public medicine directory. Columns are limited to what the seeded data really has
+/// (the demo products in web/src/lib/data.ts); `source` says where a row came from
+/// ('demo' for the seed). Not linked to prescription_items yet (future option).
+model Medicine {
+  id                   String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                 String   @db.VarChar(150)
+  genericName          String?  @map("generic_name") @db.VarChar(150)
+  strength             String?  @db.VarChar(50)
+  form                 String?  @db.VarChar(50)
+  category             String?  @db.VarChar(80)
+  requiresPrescription Boolean  @default(false) @map("requires_prescription")
+  source               String   @db.VarChar(50)
+  active               Boolean  @default(true)
+  createdAt            DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  prices MedicinePrice[]
+
+  @@unique([name, strength])
+  @@index([name])
+  @@map("medicines")
+}
+
+/// A listed price for a medicine at a named pharmacy from a date. Demo prices are
+/// illustrative, not current. pharmacy_name is free text from the source data (not a
+/// facilities link).
+model MedicinePrice {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  medicineId    String   @map("medicine_id") @db.Uuid
+  pharmacyName  String   @map("pharmacy_name") @db.VarChar(100)
+  /// CHECK >= 0 (medicines migration).
+  amount        Decimal  @db.Decimal(10, 2)
+  currency      String   @default("ZAR") @db.Char(3)
+  effectiveFrom DateTime @map("effective_from") @db.Date
+  source        String   @db.VarChar(50)
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  medicine Medicine @relation(fields: [medicineId], references: [id], onDelete: Cascade)
+
+  @@unique([medicineId, pharmacyName, effectiveFrom])
+  @@index([medicineId, effectiveFrom])
+  @@map("medicine_prices")
+}

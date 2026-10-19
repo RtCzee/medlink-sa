@@ -4,8 +4,11 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
+
+// The proxy module is imported only for its matcher config (no requests are made).
+vi.mock("@supabase/ssr", () => ({ createServerClient: vi.fn() }));
 
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), "..");
 const apiDir = join(webRoot, "src", "app", "api");
@@ -102,7 +105,7 @@ describe("OpenAPI contract (static)", () => {
       for (const method of HTTP_METHODS) {
         const op = ops[method];
         if (!op) continue;
-        const isPublic = /^\/api\/(facilities|practitioners)\b/.test(path);
+        const isPublic = /^\/api\/(facilities|practitioners|medicines)\b/.test(path);
         if (isPublic) expect(op.security, `${method} ${path}`).toEqual([]);
         else expect(op.security, `${method} ${path}`).toBeUndefined(); // inherits global security
       }
@@ -165,6 +168,16 @@ describe("OpenAPI contract (static)", () => {
     const schemas = (spec.components?.schemas ?? {}) as Record<string, { properties?: Record<string, unknown> }>;
     for (const [name, schema] of Object.entries(schemas)) {
       for (const field of restricted) expect(schema.properties ?? {}, `${name}.${field}`).not.toHaveProperty(field);
+    }
+  });
+
+  it("public operations match the proxy's skip list exactly", async () => {
+    const { config } = await import("@/proxy");
+    const matcher = new RegExp(`^${config.matcher[0]}$`);
+    for (const [path, method, op] of operations()) {
+      const concrete = path.replace(/\{[^}]+\}/g, "00000000-0000-4000-8000-000000000000");
+      const proxied = matcher.test(concrete);
+      expect(proxied, `${method} ${path}`).toBe(op.security === undefined);
     }
   });
 });

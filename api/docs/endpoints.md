@@ -13,6 +13,9 @@ Conventions are in [`conventions.md`](conventions.md).
 | GET | `/api/facilities/{id}` | Public |
 | GET | `/api/practitioners` | Public |
 | GET | `/api/practitioners/{id}` | Public |
+| GET | `/api/medicines` | Public |
+| GET | `/api/medicines/{id}` | Public |
+| GET | `/api/medicines/{id}/prices` | Public |
 | GET | `/api/appointments` | Private |
 | POST | `/api/appointments` | Private |
 | GET | `/api/appointments/{id}` | Private |
@@ -191,6 +194,40 @@ never returned.**
 ## `GET /api/practitioners/{id}` (public)
 
 Same fields as above. Errors: 400 for a bad id, 404 `PRACTITIONER_NOT_FOUND`.
+
+## Medicines (public)
+
+Public, like the facility directory: no sign-in, a session is ignored, successful
+responses are `Cache-Control: public, max-age=60, s-maxage=300` (errors `no-store`).
+Active medicines only. **The data is demo data** (`source: "demo"`) seeded from the
+app's demo products; **demo prices are illustrative, not current**. There are no
+descriptions, indications, dosage guidance, stock or availability fields.
+
+Medicine object: `id`, `name`, `genericName`, `strength`, `form`, `category` (each
+string or null except `id`/`name`), `requiresPrescription` (boolean), `source`.
+
+### `GET /api/medicines`
+
+| Query | Type | Rules |
+| --- | --- | --- |
+| `page`, `pageSize` | integer | default 1 / 20; max 1000 / 100 |
+| `q` | string, 2-100 | case-insensitive "contains" on `name` |
+| `category` | string, 1-80 | case-insensitive exact match |
+| `requiresPrescription` | `true` \| `false` | exact |
+
+Ordered by `name`, then `id`. Unknown or repeated parameters are a 400.
+
+### `GET /api/medicines/{id}`
+
+`200 { "data": <medicine> }`. 404 `MEDICINE_NOT_FOUND` for an unknown or inactive id.
+
+### `GET /api/medicines/{id}/prices`
+
+Paginated (`page`, `pageSize` only). Each price: `{ id, pharmacyName, amount, currency,
+effectiveFrom, source }`. `amount` is an exact decimal string (`"24.99"`), `currency` is
+`ZAR`, `pharmacyName` is free text from the source (not a facility link). Ordered by
+`effectiveFrom` (newest first), then `pharmacyName`, then `id`. 404 `MEDICINE_NOT_FOUND`
+if the medicine is unknown or inactive.
 
 ## Appointments (private, patient scope)
 

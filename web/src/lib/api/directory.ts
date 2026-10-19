@@ -23,7 +23,8 @@ const wholeNumber = (min: number, max: number) =>
     .transform(Number)
     .pipe(z.number().int().min(min).max(max));
 
-const nameSearch = z
+/** Case-insensitive "contains" search text (directory and medicines). */
+export const nameSearch = z
   .string()
   .trim()
   .min(2, "Search text must be at least 2 characters.")

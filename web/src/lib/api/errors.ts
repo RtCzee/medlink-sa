@@ -17,6 +17,7 @@ export type ApiErrorCode =
   | "QUEUE_TICKET_ACTIVE"
   | "QUEUE_TICKET_NOT_LEAVABLE"
   | "PRESCRIPTION_NOT_FOUND"
+  | "MEDICINE_NOT_FOUND"
   | "CONFLICT"
   | "APPOINTMENT_CONFLICT"
   | "APPOINTMENT_NOT_EDITABLE"
@@ -111,3 +112,6 @@ export const queueTicketNotLeavable = (message: string) =>
 /** Missing OR another patient's prescription: the same 404, so ids can't be probed. */
 export const prescriptionNotFound = () =>
   new ApiError(404, "PRESCRIPTION_NOT_FOUND", "No prescription with that id was found.");
+
+export const medicineNotFound = () =>
+  new ApiError(404, "MEDICINE_NOT_FOUND", "No medicine exists with that id.");
