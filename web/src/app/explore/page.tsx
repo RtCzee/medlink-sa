@@ -105,6 +105,10 @@ function ExploreContent() {
             nearest hospital, clinic or pharmacy — with live queue times and bed
             availability.
           </p>
+          <p className="mx-auto mt-2 max-w-2xl text-xs font-medium text-amber-600 dark:text-amber-400">
+            Prototype preview: prices, stock, queue times and bed counts on this page are demo
+            data, not current information.
+          </p>
         </motion.div>
 
         {/* Search + tabs */}
@@ -469,7 +473,7 @@ function ExploreContent() {
             </div>
 
             <h3 className="mt-6 font-display text-base font-semibold">
-              Compare prices across pharmacies
+              Compare prices across pharmacies (demo prices, not current)
             </h3>
             <div className="mt-3 overflow-hidden rounded-xl border border-border">
               <table className="w-full text-sm">
@@ -532,8 +536,8 @@ function ExploreContent() {
                           <button
                             disabled={!p.inStock}
                             onClick={() => {
-                              toast.success(
-                                `Order placed: ${selectedMed.name} from ${p.pharmacy} — R${p.price.toFixed(2)}`
+                              toast.info(
+                                `Demo only: online ordering isn't available yet (${selectedMed.name}, ${p.pharmacy}, demo price R${p.price.toFixed(2)}).`
                               );
                               setSelectedMed(null);
                             }}

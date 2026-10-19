@@ -18,7 +18,6 @@ import {
   AlertCircle,
   AlertTriangle,
   ArrowRight,
-  ArrowUpRight,
   BadgeCheck,
   Bell,
   Building2,
@@ -38,7 +37,6 @@ import {
   MessageSquare,
   Mic,
   MicOff,
-  Package,
   Phone,
   PhoneCall,
   PhoneOff,
@@ -51,7 +49,6 @@ import {
   Settings,
   Shield,
   ShieldCheck,
-  ShoppingCart,
   Sparkles,
   Stethoscope,
   Trash2,
@@ -64,17 +61,23 @@ import {
 
 import DashboardLayout from "@/components/layout/dashboard-layout";
 import { useAuth } from "@/lib/auth-context";
+import { PATIENT_APPOINTMENTS, PATIENT_VITALS } from "@/lib/data";
+import type { AppointmentDto } from "@/lib/api/appointments";
+import type { PractitionerDto } from "@/lib/api/directory";
+import type { MedicalRecordDto } from "@/lib/api/medical-records";
+import type { MedicineDto, MedicinePriceDto } from "@/lib/api/medicines";
+import type { PrescriptionDetailDto, PrescriptionSummaryDto } from "@/lib/api/prescriptions";
+import type { QueueDto, TicketDto } from "@/lib/api/queues";
 import {
-  CURRENT_TICKET,
-  FACILITIES,
-  MEDICINES,
-  PATIENT_APPOINTMENTS,
-  PATIENT_PRESCRIPTIONS,
-  PATIENT_RECORDS,
-  PATIENT_VITALS,
-  QUEUE_STATE,
-  type Medicine,
-} from "@/lib/data";
+  ApiRequestError,
+  apiFetch,
+  formatPrice,
+  priceLabel,
+  sastParts,
+  sastSlotToUtc,
+  sessionExpiredUrl,
+  useApi,
+} from "@/lib/client/api";
 import { cn } from "@/lib/utils";
 
 import {
@@ -101,8 +104,6 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Progress } from "@/components/ui/progress";
-import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
@@ -126,31 +127,11 @@ import { Textarea } from "@/components/ui/textarea";
    CONSTANTS
    ========================================================================= */
 
-const SPECIALTIES = [
-  "General Practice",
-  "Cardiology",
-  "Dermatology",
-  "Paediatrics",
-  "Gynaecology",
-  "Orthopaedics",
-  "Psychiatry",
-  "ENT",
-];
-
 const TIME_SLOTS = [
   "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
   "13:00", "13:30", "14:00", "14:30", "15:00", "15:30",
 ];
 
-const MED_CATEGORIES = [
-  "All",
-  "Pain & fever",
-  "Antibiotic",
-  "Diabetes",
-  "Asthma",
-  "Allergy",
-  "Pain & inflammation",
-];
 
 const LANGS = [
   { code: "en", label: "English" },
@@ -252,78 +233,11 @@ const HEALTH_TIPS = [
    HELPERS
    ========================================================================= */
 
-function formatRand(n: number) {
-  return "R" + n.toFixed(2);
-}
-
 function greeting() {
   const h = new Date().getHours();
   if (h < 12) return "Good morning";
   if (h < 17) return "Good afternoon";
   return "Good evening";
-}
-
-function findMedicineForPrescription(name: string): Medicine | undefined {
-  return MEDICINES.find((m) => name.toLowerCase().includes(m.name.toLowerCase()));
-}
-
-/* Decorative QR-style grid (NOT a real QR encoder — visual only) */
-function QRTile({ size = 168 }: { size?: number }) {
-  const N = 21;
-  const cell = size / N;
-  const isPos = (r: number, c: number) => {
-    const corners = [[0, 0], [0, N - 7], [N - 7, 0]] as const;
-    return corners.some(([cr, cc]) => r >= cr && r < cr + 7 && c >= cc && c < cc + 7);
-  };
-  const posFill = (r: number, c: number) => {
-    const corners = [[0, 0], [0, N - 7], [N - 7, 0]] as const;
-    for (const [cr, cc] of corners) {
-      if (r >= cr && r < cr + 7 && c >= cc && c < cc + 7) {
-        const lr = r - cr, lc = c - cc;
-        const outer = lr === 0 || lr === 6 || lc === 0 || lc === 6;
-        const inner = lr >= 2 && lr <= 4 && lc >= 2 && lc <= 4;
-        return outer || inner;
-      }
-    }
-    return false;
-  };
-  const cells: React.ReactElement[] = [];
-  for (let r = 0; r < N; r++) {
-    for (let c = 0; c < N; c++) {
-      let fill: boolean;
-      if (isPos(r, c)) fill = posFill(r, c);
-      else {
-        // deterministic pseudo-random
-        const h = (r * 31 + c * 17 + (r * c) ^ 0xa5) % 100;
-        fill = h < 47;
-      }
-      if (fill) {
-        cells.push(
-          <rect
-            key={`${r}-${c}`}
-            x={c * cell}
-            y={r * cell}
-            width={cell + 0.5}
-            height={cell + 0.5}
-            fill="currentColor"
-          />
-        );
-      }
-    }
-  }
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox={`0 0 ${size} ${size}`}
-      className="text-foreground"
-      role="img"
-      aria-label="Queue ticket QR code"
-    >
-      <rect width={size} height={size} fill="#ffffff" rx="10" />
-      {cells}
-    </svg>
-  );
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -717,6 +631,76 @@ function VideoCallModal({
 /* =========================================================================
    SECTION HEADER
    ========================================================================= */
+/* =========================================================================
+   LIVE API STATE (loading / empty / error / session expiry)
+   ========================================================================= */
+const PATIENT_HOME = "/dashboard/patient";
+
+function ApiState({
+  loading,
+  error,
+  empty,
+  emptyText,
+  onRetry,
+}: {
+  loading: boolean;
+  error: ApiRequestError | null;
+  empty: boolean;
+  emptyText: string;
+  onRetry: () => void;
+}) {
+  if (error?.isSessionExpired) {
+    return (
+      <div className="glass-panel flex flex-col items-center gap-3 p-8 text-center" role="alert">
+        <Lock className="h-6 w-6 text-medical" />
+        <div className="text-sm font-semibold">Your session has expired</div>
+        <div className="text-xs text-muted-foreground">Sign in again to see your information.</div>
+        <Link href={sessionExpiredUrl(PATIENT_HOME)} className="btn-primary rounded-xl px-4 py-2 text-sm font-medium">
+          Sign in again
+        </Link>
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="glass-panel flex flex-col items-center gap-3 p-8 text-center" role="alert">
+        <AlertCircle className="h-6 w-6 text-rose-500" />
+        <div className="text-sm font-semibold">{error.message}</div>
+        {error.requestId && <div className="text-[0.7rem] text-muted-foreground">Reference: {error.requestId}</div>}
+        <Button variant="outline" size="sm" onClick={onRetry} className="rounded-lg">Try again</Button>
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div className="glass-panel grid place-items-center p-10" aria-busy="true">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-medical border-t-transparent" />
+      </div>
+    );
+  }
+  if (empty) {
+    return <div className="glass-panel p-10 text-center text-sm text-muted-foreground">{emptyText}</div>;
+  }
+  return null;
+}
+
+/** Shows a failed write: session expiry gets a sign-in link, anything else the server's message. */
+function toastApiError(error: unknown, title: string) {
+  const e = error instanceof ApiRequestError ? error : null;
+  if (e?.isSessionExpired) {
+    toast.error("Your session has expired", {
+      description: "Sign in again to continue.",
+      action: { label: "Sign in", onClick: () => window.location.assign(sessionExpiredUrl(PATIENT_HOME)) },
+    });
+    return;
+  }
+  toast.error(title, { description: e?.message ?? "Something went wrong. Please try again." });
+}
+
+function initials(name: string) {
+  return name.replace(/^Dr\.?\s+/i, "").split(/\s+/).map((n) => n[0] ?? "").join("").slice(0, 2).toUpperCase();
+}
+
 function ViewHeader({ title, subtitle, action }: { title: string; subtitle?: string; action?: React.ReactNode }) {
   return (
     <motion.div
@@ -738,10 +722,18 @@ function ViewHeader({ title, subtitle, action }: { title: string; subtitle?: str
    OVERVIEW VIEW
    ========================================================================= */
 function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra?: Record<string, string>) => void }) {
-  const nextAppt = PATIENT_APPOINTMENTS[0];
-  const activeRx = PATIENT_PRESCRIPTIONS.filter((p) => p.status === "active").length;
+  // "Upcoming" = from the moment the page opened; the API orders by scheduledAt ascending.
+  const [openedAt] = useState(() => new Date().toISOString());
+  const appts = useApi<AppointmentDto[]>(`/api/appointments?from=${encodeURIComponent(openedAt)}&pageSize=20`);
+  const rx = useApi<PrescriptionSummaryDto[]>("/api/prescriptions?status=active&pageSize=1");
+  const tickets = useApi<TicketDto[]>("/api/queue-tickets?status=waiting&pageSize=1");
+  const records = useApi<MedicalRecordDto[]>("/api/medical-records?pageSize=3");
+  const upcoming = (appts.data ?? []).filter((a) => a.status === "requested" || a.status === "confirmed").slice(0, 3);
+  const nextAppt = upcoming[0];
+  const nextWhen = nextAppt ? sastParts(nextAppt.scheduledAt) : null;
+  const activeRx = rx.meta?.total;
+  const ticket = tickets.data?.[0];
   const healthScore = 87;
-
   return (
     <div className="space-y-6">
       {/* Welcome */}
@@ -796,24 +788,24 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
         <StatCard
           icon={Calendar}
           label="Next appointment"
-          value={nextAppt.date === "Today" ? nextAppt.time : nextAppt.date}
-          sub={`${nextAppt.doctor} · ${nextAppt.specialty}`}
+          value={appts.loading && !appts.data ? "…" : nextWhen ? `${nextWhen.date}` : "None"}
+          sub={nextAppt && nextWhen ? `${nextWhen.time} SAST · ${nextAppt.practitionerName}` : appts.error ? "Couldn't load appointments" : "No upcoming appointments"}
           accent="medical"
           index={0}
         />
         <StatCard
           icon={Pill}
           label="Active prescriptions"
-          value={String(activeRx)}
-          sub="2 refills available"
+          value={activeRx === undefined ? (rx.error ? "—" : "…") : String(activeRx)}
+          sub={rx.error ? "Couldn't load prescriptions" : "Issued to your account"}
           accent="cyan"
           index={1}
         />
         <StatCard
           icon={QrCode}
           label="Queue position"
-          value={`#${CURRENT_TICKET.number}`}
-          sub={`~${CURRENT_TICKET.estimatedWaitMin} min wait`}
+          value={ticket ? `#${ticket.ticketNumber}` : tickets.loading && !tickets.data ? "…" : "—"}
+          sub={ticket ? `${ticket.waitingAhead ?? 0} ahead · ${ticket.facilityName}` : tickets.error ? "Couldn't load your ticket" : "Not in a queue"}
           accent="amber"
           index={2}
         />
@@ -839,7 +831,7 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
           <div className="mb-4 flex items-center justify-between">
             <div>
               <h3 className="font-display text-lg font-semibold">Vitals this week</h3>
-              <p className="text-xs text-muted-foreground">Blood pressure, heart rate & SpO₂</p>
+              <p className="text-xs text-muted-foreground">Sample data (vitals aren&apos;t recorded by MedLink yet)</p>
             </div>
             <div className="hidden items-center gap-3 sm:flex">
               <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -897,20 +889,28 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
             </button>
           </div>
           <div className="space-y-3">
-            {PATIENT_APPOINTMENTS.slice(0, 3).map((a) => (
-              <div key={a.id} className="flex items-center gap-3 rounded-xl border border-border/60 bg-card/40 p-3">
-                <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-medical/10 text-medical">
-                  {a.type === "video" ? <Video className="h-4 w-4" /> : <Stethoscope className="h-4 w-4" />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm font-semibold">{a.doctor}</div>
-                  <div className="truncate text-xs text-muted-foreground">
-                    {a.date} · {a.time} · {a.specialty}
-                  </div>
-                </div>
-                <StatusPill status={a.status} />
+            {upcoming.length === 0 && (
+              <div className="rounded-xl border border-border/60 bg-card/40 p-4 text-sm text-muted-foreground">
+                {appts.loading && !appts.data ? "Loading…" : appts.error ? appts.error.message : "No upcoming appointments."}
               </div>
-            ))}
+            )}
+            {upcoming.map((a) => {
+              const when = sastParts(a.scheduledAt);
+              return (
+                <div key={a.id} className="flex items-center gap-3 rounded-xl border border-border/60 bg-card/40 p-3">
+                  <div className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-medical/10 text-medical">
+                    <Stethoscope className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-semibold">{a.practitionerName}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {when.date} · {when.time} SAST · {a.specialty}
+                    </div>
+                  </div>
+                  <StatusPill status={a.status === "requested" ? "pending" : a.status} />
+                </div>
+              );
+            })}
           </div>
         </motion.div>
       </div>
@@ -931,8 +931,13 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
             </button>
           </div>
           <div className="space-y-2">
-            {PATIENT_RECORDS.map((r) => {
-              const Icon = r.type === "Imaging" ? FileImage : r.type === "Lab" ? FlaskConical : FileText;
+            {(records.data ?? []).length === 0 && (
+              <div className="rounded-xl border border-border/60 bg-card/40 p-4 text-sm text-muted-foreground">
+                {records.loading && !records.data ? "Loading…" : records.error ? records.error.message : "No medical records yet."}
+              </div>
+            )}
+            {(records.data ?? []).map((r) => {
+              const Icon = recordIcon(r.category);
               return (
                 <div key={r.id} className="flex items-center gap-3 rounded-xl border border-border/60 bg-card/40 p-3">
                   <span className="grid h-9 w-9 place-items-center rounded-lg bg-foreground/5 text-muted-foreground">
@@ -941,10 +946,9 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
                   <div className="min-w-0 flex-1">
                     <div className="truncate text-sm font-semibold">{r.title}</div>
                     <div className="truncate text-xs text-muted-foreground">
-                      {r.facility} · {r.doctor} · {r.date}
+                      {[r.category, r.provider, r.recordedOn].filter(Boolean).join(" · ")}
                     </div>
                   </div>
-                  <StatusPill status={r.type === "Lab" ? "completed" : "completed"} />
                 </div>
               );
             })}
@@ -965,12 +969,12 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
             <span className="grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-br from-medical to-cyan-400 text-white shadow-lg">
               <Truck className="h-6 w-6" />
             </span>
-            <h3 className="mt-4 font-display text-lg font-semibold">Order medicine</h3>
+            <h3 className="mt-4 font-display text-lg font-semibold">Medicines</h3>
             <p className="mt-1 text-sm text-muted-foreground">
-              Compare prices across Clicks, Dis-Chem, Rosebank Pharmacy & more. Delivery in 30 min.
+              Look up medicines and compare sample (demo) pharmacy prices.
             </p>
             <div className="mt-4 flex items-center gap-1.5 text-sm font-medium text-medical">
-              Browse marketplace
+              Browse medicines
               <ArrowRight className="h-4 w-4 transition group-hover:translate-x-1" />
             </div>
           </div>
@@ -1000,36 +1004,33 @@ function OverviewView({ user, goToTab }: { user: any; goToTab: (t: string, extra
 /* =========================================================================
    APPOINTMENTS VIEW
    ========================================================================= */
-function AppointmentsView({ onJoinVideo }: { onJoinVideo: (appt: any) => void }) {
+function AppointmentsView() {
+  const appts = useApi<AppointmentDto[]>("/api/appointments?pageSize=100");
   const [bookOpen, setBookOpen] = useState(false);
-  const [form, setForm] = useState({
-    specialty: "",
-    facility: "",
-    date: undefined as Date | undefined,
-    slot: "",
-    reason: "",
-    type: "video" as "video" | "in-person",
-  });
+  const [rescheduling, setRescheduling] = useState<AppointmentDto | null>(null);
+  const [cancelling, setCancelling] = useState<AppointmentDto | null>(null);
+  const [busy, setBusy] = useState(false);
+  const list = appts.data ?? [];
 
-  const facilities = FACILITIES.filter((f) => f.category !== "pharmacy");
-
-  const submit = () => {
-    if (!form.specialty || !form.facility || !form.date || !form.slot) {
-      toast.error("Please fill in all required fields");
-      return;
+  const cancel = async (a: AppointmentDto) => {
+    setBusy(true);
+    try {
+      await apiFetch<AppointmentDto>(`/api/appointments/${a.id}/cancel`, { method: "POST", body: {} });
+      toast.success("Appointment cancelled", { description: `${a.practitionerName} · ${sastParts(a.scheduledAt).date}` });
+      appts.reload();
+    } catch (error) {
+      toastApiError(error, "Could not cancel the appointment");
+    } finally {
+      setBusy(false);
+      setCancelling(null);
     }
-    toast.success("Appointment requested", {
-      description: `${form.specialty} at ${form.facility} on ${form.date.toDateString()}, ${form.slot}.`,
-    });
-    setBookOpen(false);
-    setForm({ specialty: "", facility: "", date: undefined, slot: "", reason: "", type: "video" });
   };
 
   return (
     <div>
       <ViewHeader
         title="Appointments"
-        subtitle="Manage upcoming visits, join video consults, and book new appointments."
+        subtitle="Your appointment requests and visits. Times are South African time (SAST)."
         action={
           <Button onClick={() => setBookOpen(true)} className="btn-primary gap-2 rounded-xl">
             <CalendarPlus className="h-4 w-4" /> Book new
@@ -1037,337 +1038,427 @@ function AppointmentsView({ onJoinVideo }: { onJoinVideo: (appt: any) => void })
         }
       />
 
-      <div className="glass-panel overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-foreground/[0.02] text-left text-xs uppercase tracking-wider text-muted-foreground">
-                <th className="px-4 py-3 font-semibold">Doctor</th>
-                <th className="px-4 py-3 font-semibold">Facility</th>
-                <th className="px-4 py-3 font-semibold">Date / time</th>
-                <th className="px-4 py-3 font-semibold">Type</th>
-                <th className="px-4 py-3 font-semibold">Status</th>
-                <th className="px-4 py-3 text-right font-semibold">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {PATIENT_APPOINTMENTS.map((a) => (
-                <tr key={a.id} className="border-b border-border/60 last:border-0 transition hover:bg-foreground/[0.02]">
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-3">
-                      <Avatar className="h-9 w-9">
-                        <AvatarFallback className="bg-gradient-to-br from-medical to-cyan-400 text-xs font-bold text-white">
-                          {a.doctor.replace("Dr. ", "").split(" ").map((n) => n[0]).join("").slice(0, 2)}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <div className="font-semibold">{a.doctor}</div>
-                        <div className="text-xs text-muted-foreground">{a.specialty}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground">{a.facility}</td>
-                  <td className="px-4 py-3">
-                    <div className="font-medium">{a.date}</div>
-                    <div className="text-xs text-muted-foreground">{a.time}</div>
-                  </td>
-                  <td className="px-4 py-3">
-                    <span className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.7rem] font-semibold",
-                      a.type === "video"
-                        ? "border-medical/30 bg-medical/10 text-medical"
-                        : "border-border bg-foreground/5 text-muted-foreground"
-                    )}>
-                      {a.type === "video" ? <Video className="h-3 w-3" /> : <Stethoscope className="h-3 w-3" />}
-                      {a.type === "video" ? "Video" : "In-person"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-3"><StatusPill status={a.status} /></td>
-                  <td className="px-4 py-3">
-                    <div className="flex items-center justify-end gap-1.5">
-                      {a.type === "video" && (
-                        <Button
-                          size="sm"
-                          onClick={() => onJoinVideo(a)}
-                          className="btn-primary gap-1.5 rounded-lg px-3"
-                        >
-                          <Video className="h-3.5 w-3.5" /> Join
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toast.info("Reschedule request sent", { description: "The reception desk will call you to confirm." })}
-                        className="rounded-lg"
-                      >
-                        Reschedule
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => toast.error("Appointment cancelled", { description: "A confirmation SMS has been sent." })}
-                        className="rounded-lg text-rose-500 hover:bg-rose-500/10"
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  </td>
+      {appts.error || appts.loading || list.length === 0 ? (
+        <ApiState
+          loading={appts.loading && !appts.data}
+          error={appts.error}
+          empty={list.length === 0}
+          emptyText="You have no appointments yet. Use “Book new” to request one."
+          onRetry={appts.reload}
+        />
+      ) : null}
+
+      {list.length > 0 && !appts.error && (
+        <div className="glass-panel overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border bg-foreground/[0.02] text-left text-xs uppercase tracking-wider text-muted-foreground">
+                  <th className="px-4 py-3 font-semibold">Doctor</th>
+                  <th className="px-4 py-3 font-semibold">Facility</th>
+                  <th className="px-4 py-3 font-semibold">Date / time</th>
+                  <th className="px-4 py-3 font-semibold">Reason</th>
+                  <th className="px-4 py-3 font-semibold">Status</th>
+                  <th className="px-4 py-3 text-right font-semibold">Actions</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {list.map((a) => {
+                  const when = sastParts(a.scheduledAt);
+                  const open = a.status === "requested" || a.status === "confirmed";
+                  return (
+                    <tr key={a.id} className="border-b border-border/60 last:border-0 transition hover:bg-foreground/[0.02]">
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <Avatar className="h-9 w-9">
+                            <AvatarFallback className="bg-gradient-to-br from-medical to-cyan-400 text-xs font-bold text-white">
+                              {initials(a.practitionerName)}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div>
+                            <div className="font-semibold">{a.practitionerName}</div>
+                            <div className="text-xs text-muted-foreground">{a.specialty}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground">{a.facilityName}</td>
+                      <td className="px-4 py-3">
+                        <div className="font-medium">{when.date}</div>
+                        <div className="text-xs text-muted-foreground">{when.time} SAST</div>
+                      </td>
+                      <td className="max-w-[220px] truncate px-4 py-3 text-muted-foreground">{a.reason ?? "—"}</td>
+                      <td className="px-4 py-3"><StatusPill status={a.status === "requested" ? "pending" : a.status} /></td>
+                      <td className="px-4 py-3">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {a.status === "requested" && (
+                            <Button variant="ghost" size="sm" disabled={busy} onClick={() => setRescheduling(a)} className="rounded-lg">
+                              Reschedule
+                            </Button>
+                          )}
+                          {open && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => setCancelling(a)}
+                              className="rounded-lg text-rose-500 hover:bg-rose-500/10"
+                            >
+                              Cancel
+                            </Button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
-      {/* Book dialog */}
-      <Dialog open={bookOpen} onOpenChange={setBookOpen}>
-        <DialogContent className="glass-strong max-h-[90vh] overflow-y-auto sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle className="font-display text-xl">Book an appointment</DialogTitle>
-            <DialogDescription>Choose a specialty, facility and time that works for you.</DialogDescription>
-          </DialogHeader>
+      <AppointmentDialog
+        key={rescheduling?.id ?? (bookOpen ? "book" : "closed")}
+        open={bookOpen || !!rescheduling}
+        appointment={rescheduling}
+        onClose={() => {
+          setBookOpen(false);
+          setRescheduling(null);
+        }}
+        onSaved={appts.reload}
+      />
 
-          <div className="space-y-4">
-            <div>
-              <Label className="mb-1.5 block text-xs font-medium">Specialty</Label>
-              <Select value={form.specialty} onValueChange={(v) => setForm({ ...form, specialty: v })}>
-                <SelectTrigger className="input-premium h-10"><SelectValue placeholder="Select a specialty" /></SelectTrigger>
-                <SelectContent>
-                  {SPECIALTIES.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                </SelectContent>
-              </Select>
+      <AlertDialog open={!!cancelling} onOpenChange={(v) => !v && setCancelling(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel this appointment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {cancelling ? `${cancelling.practitionerName} · ${sastParts(cancelling.scheduledAt).date} ${sastParts(cancelling.scheduledAt).time} SAST. This can't be undone.` : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Keep it</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={() => cancelling && cancel(cancelling)}>Cancel appointment</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  );
+}
+
+/** Book (appointment = null) or reschedule (appointment set) through the real API. */
+function AppointmentDialog({
+  open,
+  appointment,
+  onClose,
+  onSaved,
+}: {
+  open: boolean;
+  appointment: AppointmentDto | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const rescheduling = !!appointment;
+  const practitioners = useApi<PractitionerDto[]>(open && !rescheduling ? "/api/practitioners?pageSize=100" : null);
+  const [specialty, setSpecialty] = useState("");
+  const [practitionerId, setPractitionerId] = useState("");
+  const [date, setDate] = useState<Date | undefined>(undefined);
+  const [slot, setSlot] = useState("");
+  const [reason, setReason] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const all = practitioners.data ?? [];
+  const specialties = [...new Set(all.map((p) => p.specialty))].sort();
+  const choices = all.filter((p) => !specialty || p.specialty === specialty);
+
+  const submit = async () => {
+    const scheduledAt = date && slot ? sastSlotToUtc(date, slot) : null;
+    if ((!rescheduling && !practitionerId) || !scheduledAt) {
+      toast.error("Please fill in all required fields");
+      return;
+    }
+    setSaving(true);
+    try {
+      const { data } = rescheduling
+        ? await apiFetch<AppointmentDto>(`/api/appointments/${appointment.id}`, { method: "PATCH", body: { scheduledAt } })
+        : await apiFetch<AppointmentDto>("/api/appointments", {
+            method: "POST",
+            body: { practitionerId, scheduledAt, ...(reason.trim() ? { reason: reason.trim() } : {}) },
+          });
+      const when = sastParts(data.scheduledAt);
+      toast.success(rescheduling ? "Appointment moved" : "Appointment requested", {
+        description: `${data.practitionerName} at ${data.facilityName} on ${when.date}, ${when.time} SAST.`,
+      });
+      onSaved();
+      onClose();
+    } catch (error) {
+      toastApiError(error, rescheduling ? "Could not reschedule" : "Could not book the appointment");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="glass-strong max-h-[90vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle className="font-display text-xl">{rescheduling ? "Reschedule appointment" : "Book an appointment"}</DialogTitle>
+          <DialogDescription>
+            {rescheduling
+              ? `${appointment.practitionerName} · ${appointment.facilityName}`
+              : "Choose a practitioner and a time (SAST). The practice confirms your request."}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {!rescheduling && (
+            <>
+              {(practitioners.error || practitioners.loading || all.length === 0) && (
+                <ApiState
+                  loading={practitioners.loading}
+                  error={practitioners.error}
+                  empty={all.length === 0}
+                  emptyText="No practitioners are listed yet, so appointments can't be booked."
+                  onRetry={practitioners.reload}
+                />
+              )}
+              {all.length > 0 && (
+                <>
+                  <div>
+                    <Label className="mb-1.5 block text-xs font-medium">Specialty</Label>
+                    <Select value={specialty || "all"} onValueChange={(v) => { setSpecialty(v === "all" ? "" : v); setPractitionerId(""); }}>
+                      <SelectTrigger className="input-premium h-10"><SelectValue placeholder="Any specialty" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="all">Any specialty</SelectItem>
+                        {specialties.map((s) => <SelectItem key={s} value={s}>{s}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="mb-1.5 block text-xs font-medium">Practitioner</Label>
+                    <Select value={practitionerId} onValueChange={setPractitionerId}>
+                      <SelectTrigger className="input-premium h-10"><SelectValue placeholder="Select a practitioner" /></SelectTrigger>
+                      <SelectContent>
+                        {choices.map((p) => (
+                          <SelectItem key={p.id} value={p.id}>
+                            {p.fullName} · {p.specialty}{p.facility ? ` · ${p.facility.name}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </>
+              )}
+            </>
+          )}
+
+          <div>
+            <Label className="mb-1.5 block text-xs font-medium">{rescheduling ? "New date" : "Preferred date"}</Label>
+            <CalendarUI
+              mode="single"
+              selected={date}
+              onSelect={setDate}
+              disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
+              className="input-premium rounded-xl border p-2"
+            />
+          </div>
+
+          <div>
+            <Label className="mb-1.5 block text-xs font-medium">Time slot (SAST)</Label>
+            <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {TIME_SLOTS.map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => setSlot(s)}
+                  className={cn(
+                    "rounded-lg border py-2 text-sm font-medium transition",
+                    slot === s ? "border-medical bg-medical text-white" : "border-border bg-card/40 hover:border-medical/50"
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
             </div>
+          </div>
 
+          {!rescheduling && (
             <div>
-              <Label className="mb-1.5 block text-xs font-medium">Facility</Label>
-              <Select value={form.facility} onValueChange={(v) => setForm({ ...form, facility: v })}>
-                <SelectTrigger className="input-premium h-10"><SelectValue placeholder="Select a facility" /></SelectTrigger>
-                <SelectContent>
-                  {facilities.map((f) => <SelectItem key={f.id} value={f.name}>{f.name}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label className="mb-1.5 block text-xs font-medium">Preferred date</Label>
-              <CalendarUI
-                mode="single"
-                selected={form.date}
-                onSelect={(d) => setForm({ ...form, date: d })}
-                disabled={(d) => d < new Date(new Date().setHours(0, 0, 0, 0))}
-                className="input-premium rounded-xl border p-2"
-              />
-            </div>
-
-            <div>
-              <Label className="mb-1.5 block text-xs font-medium">Time slot</Label>
-              <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
-                {TIME_SLOTS.map((s) => (
-                  <button
-                    key={s}
-                    onClick={() => setForm({ ...form, slot: s })}
-                    className={cn(
-                      "rounded-lg border py-2 text-sm font-medium transition",
-                      form.slot === s
-                        ? "border-medical bg-medical text-white"
-                        : "border-border bg-card/40 hover:border-medical/50"
-                    )}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <Label className="mb-1.5 block text-xs font-medium">Reason for visit</Label>
+              <Label className="mb-1.5 block text-xs font-medium">Reason for visit (optional)</Label>
               <Textarea
-                value={form.reason}
-                onChange={(e) => setForm({ ...form, reason: e.target.value })}
+                value={reason}
+                maxLength={500}
+                onChange={(e) => setReason(e.target.value)}
                 placeholder="Briefly describe your symptoms or reason…"
                 className="input-premium min-h-[80px] resize-none"
               />
             </div>
+          )}
+        </div>
 
-            <div>
-              <Label className="mb-1.5 block text-xs font-medium">Consultation type</Label>
-              <RadioGroup
-                value={form.type}
-                onValueChange={(v) => setForm({ ...form, type: v as any })}
-                className="grid grid-cols-2 gap-2"
-              >
-                <label className={cn("flex cursor-pointer items-center gap-2 rounded-lg border p-3 transition", form.type === "video" ? "border-medical bg-medical/10" : "border-border")}>
-                  <RadioGroupItem value="video" />
-                  <Video className="h-4 w-4 text-medical" />
-                  <span className="text-sm font-medium">Video</span>
-                </label>
-                <label className={cn("flex cursor-pointer items-center gap-2 rounded-lg border p-3 transition", form.type === "in-person" ? "border-medical bg-medical/10" : "border-border")}>
-                  <RadioGroupItem value="in-person" />
-                  <Stethoscope className="h-4 w-4 text-medical" />
-                  <span className="text-sm font-medium">In-person</span>
-                </label>
-              </RadioGroup>
-            </div>
-          </div>
-
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setBookOpen(false)}>Cancel</Button>
-            <Button onClick={submit} className="btn-primary">Request appointment</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-    </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={onClose} disabled={saving}>Close</Button>
+          <Button onClick={submit} disabled={saving} className="btn-primary">
+            {saving ? "Saving…" : rescheduling ? "Move appointment" : "Request appointment"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
 /* =========================================================================
    RECORDS VIEW
    ========================================================================= */
+function recordIcon(category: string) {
+  const c = category.toLowerCase();
+  return c.includes("imag") || c.includes("x-ray") ? FileImage : c.includes("lab") ? FlaskConical : FileText;
+}
+
 function RecordsView() {
+  const records = useApi<MedicalRecordDto[]>("/api/medical-records?pageSize=100");
   const [filter, setFilter] = useState("All");
   const [q, setQ] = useState("");
-  const [selected, setSelected] = useState<any>(null);
+  const [selected, setSelected] = useState<MedicalRecordDto | null>(null);
 
-  const filtered = PATIENT_RECORDS.filter((r) => {
-    const matchFilter = filter === "All" || r.type === filter.slice(0, -1) || (filter === "Consultations" && r.type === "Consultation");
-    const matchQ = !q || r.title.toLowerCase().includes(q.toLowerCase()) || r.facility.toLowerCase().includes(q.toLowerCase()) || r.doctor.toLowerCase().includes(q.toLowerCase());
+  const all = records.data ?? [];
+  const filterChips = ["All", ...[...new Set(all.map((r) => r.category))].sort()];
+  const needle = q.trim().toLowerCase();
+  const filtered = all.filter((r) => {
+    const matchFilter = filter === "All" || r.category === filter;
+    const matchQ =
+      !needle ||
+      r.title.toLowerCase().includes(needle) ||
+      (r.provider ?? "").toLowerCase().includes(needle) ||
+      r.category.toLowerCase().includes(needle);
     return matchFilter && matchQ;
   });
 
-  const filterChips = ["All", "Consultations", "Imaging", "Lab"];
-
   return (
     <div>
-      <ViewHeader title="Medical records" subtitle="Your consultations, imaging and lab results — all in one place." />
+      <ViewHeader title="Medical records" subtitle="Records saved on your MedLink account. Only you can see them." />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <div className="input-premium flex h-10 flex-1 items-center gap-2 px-3 sm:max-w-xs">
-          <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search records…"
-            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
-          />
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {filterChips.map((c) => (
-            <button
-              key={c}
-              onClick={() => setFilter(c)}
-              className={cn(
-                "rounded-full border px-3 py-1.5 text-xs font-medium transition",
-                filter === c
-                  ? "border-medical bg-medical text-white"
-                  : "border-border bg-card/40 hover:border-medical/40"
-              )}
-            >
-              {c}
-            </button>
-          ))}
-        </div>
-      </div>
+      {records.error || records.loading || all.length === 0 ? (
+        <ApiState
+          loading={records.loading && !records.data}
+          error={records.error}
+          empty={all.length === 0}
+          emptyText="No medical records on your account yet."
+          onRetry={records.reload}
+        />
+      ) : (
+        <>
+          <div className="mb-4 flex flex-wrap items-center gap-3">
+            <div className="input-premium flex h-10 flex-1 items-center gap-2 px-3 sm:max-w-xs">
+              <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <input
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+                placeholder="Search records…"
+                className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+              />
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {filterChips.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => setFilter(c)}
+                  className={cn(
+                    "rounded-full border px-3 py-1.5 text-xs font-medium transition",
+                    filter === c ? "border-medical bg-medical text-white" : "border-border bg-card/40 hover:border-medical/40"
+                  )}
+                >
+                  {c}
+                </button>
+              ))}
+            </div>
+          </div>
 
-      <div className="glass-panel overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-border bg-foreground/[0.02] text-left text-xs uppercase tracking-wider text-muted-foreground">
-                <th className="px-4 py-3 font-semibold">Record</th>
-                <th className="px-4 py-3 font-semibold">Type</th>
-                <th className="px-4 py-3 font-semibold">Facility</th>
-                <th className="px-4 py-3 font-semibold">Doctor</th>
-                <th className="px-4 py-3 font-semibold">Date</th>
-                <th className="px-4 py-3 text-right font-semibold"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((r) => {
-                const Icon = r.type === "Imaging" ? FileImage : r.type === "Lab" ? FlaskConical : FileText;
-                return (
-                  <tr
-                    key={r.id}
-                    onClick={() => setSelected(r)}
-                    className="cursor-pointer border-b border-border/60 last:border-0 transition hover:bg-foreground/[0.02]"
-                  >
-                    <td className="px-4 py-3">
-                      <div className="flex items-center gap-3">
-                        <span className="grid h-9 w-9 place-items-center rounded-lg bg-foreground/5 text-muted-foreground">
-                          <Icon className="h-4 w-4" />
-                        </span>
-                        <span className="font-semibold">{r.title}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className={cn(
-                        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[0.7rem] font-semibold",
-                        r.type === "Imaging" ? "border-violet-500/30 bg-violet-500/10 text-violet-600 dark:text-violet-400"
-                        : r.type === "Lab" ? "border-cyan-500/30 bg-cyan-500/10 text-cyan-600 dark:text-cyan-400"
-                        : "border-medical/30 bg-medical/10 text-medical"
-                      )}>
-                        {r.type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3 text-muted-foreground">{r.facility}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{r.doctor}</td>
-                    <td className="px-4 py-3 text-muted-foreground">{r.date}</td>
-                    <td className="px-4 py-3 text-right">
-                      <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                    </td>
+          <div className="glass-panel overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-border bg-foreground/[0.02] text-left text-xs uppercase tracking-wider text-muted-foreground">
+                    <th className="px-4 py-3 font-semibold">Record</th>
+                    <th className="px-4 py-3 font-semibold">Category</th>
+                    <th className="px-4 py-3 font-semibold">Provider</th>
+                    <th className="px-4 py-3 font-semibold">Date</th>
+                    <th className="px-4 py-3 text-right font-semibold"></th>
                   </tr>
-                );
-              })}
-              {filtered.length === 0 && (
-                <tr>
-                  <td colSpan={6} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                    No records match your search.
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
+                </thead>
+                <tbody>
+                  {filtered.map((r) => {
+                    const Icon = recordIcon(r.category);
+                    return (
+                      <tr
+                        key={r.id}
+                        onClick={() => setSelected(r)}
+                        className="cursor-pointer border-b border-border/60 last:border-0 transition hover:bg-foreground/[0.02]"
+                      >
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <span className="grid h-9 w-9 place-items-center rounded-lg bg-foreground/5 text-muted-foreground">
+                              <Icon className="h-4 w-4" />
+                            </span>
+                            <span className="font-semibold">{r.title}</span>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-medical/30 bg-medical/10 px-2.5 py-0.5 text-[0.7rem] font-semibold text-medical">
+                            {r.category}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground">{r.provider ?? "—"}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{r.recordedOn}</td>
+                        <td className="px-4 py-3 text-right">
+                          <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {filtered.length === 0 && (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-12 text-center text-sm text-muted-foreground">
+                        No records match your search.
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </>
+      )}
 
-      {/* Detail drawer */}
       <Sheet open={!!selected} onOpenChange={(v) => !v && setSelected(null)}>
         <SheetContent className="glass-strong w-full sm:max-w-md">
           {selected && (
             <>
               <SheetHeader>
                 <SheetTitle className="font-display text-xl">{selected.title}</SheetTitle>
-                <SheetDescription>{selected.facility} · {selected.date}</SheetDescription>
+                <SheetDescription>{selected.category} · {selected.recordedOn}</SheetDescription>
               </SheetHeader>
               <div className="space-y-4 px-4 pb-6">
-                <div className="flex items-center gap-3 rounded-xl border border-border bg-card/40 p-3">
-                  <Avatar className="h-10 w-10">
-                    <AvatarFallback className="bg-gradient-to-br from-medical to-cyan-400 text-xs font-bold text-white">
-                      {selected.doctor.replace("Dr. ", "").split(" ").map((n: string) => n[0]).join("").slice(0, 2)}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div>
-                    <div className="text-sm font-semibold">{selected.doctor}</div>
-                    <div className="text-xs text-muted-foreground">Attending clinician</div>
+                {selected.provider && (
+                  <div className="flex items-center gap-3 rounded-xl border border-border bg-card/40 p-3">
+                    <Avatar className="h-10 w-10">
+                      <AvatarFallback className="bg-gradient-to-br from-medical to-cyan-400 text-xs font-bold text-white">
+                        {initials(selected.provider)}
+                      </AvatarFallback>
+                    </Avatar>
+                    <div>
+                      <div className="text-sm font-semibold">{selected.provider}</div>
+                      <div className="text-xs text-muted-foreground">Provider (as recorded)</div>
+                    </div>
                   </div>
-                </div>
-
+                )}
                 <div className="rounded-xl border border-border bg-card/40 p-4">
-                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Summary</div>
-                  <p className="text-sm leading-relaxed text-foreground/90">
-                    {selected.type === "Consultation" && "Patient reports well-controlled hypertension on current regimen. No chest pain, dyspnoea or palpitations. BP 127/75, HR 73. ECG sinus rhythm, no ischaemic changes. Continue Glucophage 850mg BD; add Aspegic 100mg nocte for cardiovascular prophylaxis. Review in 3 months."}
-                    {selected.type === "Imaging" && "PA chest radiograph. Lung fields clear. Cardiac silhouette within normal limits. No active consolidation, effusion or pneumothorax. Bony thorax unremarkable. Impression: normal study."}
-                    {selected.type === "Lab" && "HbA1c 6.4% (prediabetes range). Fasting glucose 6.3 mmol/L. Lipid profile: total chol 4.8, LDL 2.9, HDL 1.4, TG 1.1. eGFR >90. Recommend lifestyle reinforcement and recheck in 6 months."}
-                  </p>
+                  <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Notes</div>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-foreground/90">{selected.notes ?? "No notes."}</p>
                 </div>
-
-                <div className="grid grid-cols-2 gap-2">
-                  <Button variant="outline" className="rounded-xl"><FileCheck className="h-4 w-4" /> Download PDF</Button>
-                  <Button variant="outline" className="rounded-xl"><ShareIcon /> Share with doctor</Button>
-                </div>
-
                 <div className="rounded-xl bg-medical/5 p-3 text-xs text-muted-foreground">
                   <Lock className="mr-1.5 inline h-3 w-3 text-medical" />
-                  Record sealed under POPIA. Audit-logged access only.
+                  Visible only to you (enforced by the API and database row-level security).
                 </div>
               </div>
             </>
@@ -1377,459 +1468,257 @@ function RecordsView() {
     </div>
   );
 }
-function ShareIcon() {
-  return <ArrowUpRight className="h-4 w-4" />;
-}
 
 /* =========================================================================
    PRESCRIPTIONS VIEW
    ========================================================================= */
 function PrescriptionsView({ goToTab }: { goToTab: (t: string, extra?: Record<string, string>) => void }) {
+  const list = useApi<PrescriptionSummaryDto[]>("/api/prescriptions?pageSize=100");
+  const [openId, setOpenId] = useState<string | null>(null);
+  const items = list.data ?? [];
+
   return (
     <div>
-      <ViewHeader title="Prescriptions" subtitle="Active and past prescriptions. Request refills or order from your nearest pharmacy." />
+      <ViewHeader title="Prescriptions" subtitle="Prescriptions issued to you. Refill requests and dispensing are not available online yet." />
 
-      <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {PATIENT_PRESCRIPTIONS.map((p, i) => (
-          <motion.div
-            key={p.id}
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.35, delay: i * 0.06 }}
-            className="glass-panel flex flex-col p-5"
-          >
-            <div className="flex items-start justify-between">
-              <span className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-medical to-cyan-400 text-white shadow-lg">
-                <Pill className="h-5 w-5" />
-              </span>
-              <StatusPill status={p.status} />
-            </div>
-            <h3 className="mt-3 font-display text-lg font-semibold">{p.medicine}</h3>
-            <div className="mt-1 text-sm text-muted-foreground">{p.dosage}</div>
-
-            <div className="my-4 hairline" />
-
-            <div className="space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Prescribed by</span>
-                <span className="font-medium">{p.prescribedBy}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Date</span>
-                <span className="font-medium">{p.date}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Refills left</span>
-                <span className={cn("font-semibold", p.refillsLeft > 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500")}>
-                  {p.refillsLeft}
+      {list.error || list.loading || items.length === 0 ? (
+        <ApiState
+          loading={list.loading && !list.data}
+          error={list.error}
+          empty={items.length === 0}
+          emptyText="No prescriptions on your account yet."
+          onRetry={list.reload}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {items.map((p, i) => (
+            <motion.div
+              key={p.id}
+              initial={{ opacity: 0, y: 16 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ duration: 0.35, delay: i * 0.06 }}
+              className="glass-panel flex flex-col p-5"
+            >
+              <div className="flex items-start justify-between">
+                <span className="grid h-11 w-11 place-items-center rounded-xl bg-gradient-to-br from-medical to-cyan-400 text-white shadow-lg">
+                  <Pill className="h-5 w-5" />
                 </span>
+                <StatusPill status={p.status === "expired" ? "cancelled" : p.status} />
               </div>
-            </div>
+              <h3 className="mt-3 font-display text-lg font-semibold">
+                {p.itemCount} item{p.itemCount === 1 ? "" : "s"}
+              </h3>
+              {p.notes && <div className="mt-1 text-sm text-muted-foreground">{p.notes}</div>}
 
-            <div className="mt-5 flex flex-col gap-2">
-              <Button
-                disabled={p.status !== "active" || p.refillsLeft === 0}
-                onClick={() => toast.success("Refill requested", { description: `${p.medicine} — your pharmacy has been notified.` })}
-                className="btn-primary gap-2 rounded-xl"
-              >
-                <RefreshIcon /> Request refill
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => {
-                  const med = findMedicineForPrescription(p.medicine);
-                  goToTab("medicine", med ? { medicineId: med.id } : undefined);
-                }}
-                className="rounded-xl"
-              >
-                <Truck className="h-4 w-4" /> Order from pharmacy
-              </Button>
-            </div>
-          </motion.div>
-        ))}
-      </div>
+              <div className="my-4 hairline" />
+
+              <div className="space-y-2 text-sm">
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Prescribed by</span>
+                  <span className="text-right font-medium">{p.practitioner?.fullName ?? "—"}</span>
+                </div>
+                <div className="flex justify-between gap-3">
+                  <span className="text-muted-foreground">Facility</span>
+                  <span className="text-right font-medium">{p.facility?.name ?? "—"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Issued</span>
+                  <span className="font-medium">{p.issuedOn}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Expires</span>
+                  <span className="font-medium">{p.expiresOn ?? "—"}</span>
+                </div>
+              </div>
+
+              {openId === p.id && <PrescriptionItems id={p.id} />}
+
+              <div className="mt-5 flex flex-col gap-2">
+                <Button variant="outline" onClick={() => setOpenId(openId === p.id ? null : p.id)} className="rounded-xl">
+                  <FileText className="h-4 w-4" /> {openId === p.id ? "Hide items" : "View items"}
+                </Button>
+                <Button variant="outline" onClick={() => goToTab("medicine")} className="rounded-xl">
+                  <Pill className="h-4 w-4" /> Look up medicines
+                </Button>
+              </div>
+            </motion.div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
-function RefreshIcon() {
+
+function PrescriptionItems({ id }: { id: string }) {
+  const detail = useApi<PrescriptionDetailDto>(`/api/prescriptions/${id}`);
+  const items = detail.data?.items ?? [];
+  if (detail.error || detail.loading || items.length === 0) {
+    return (
+      <div className="mt-4">
+        <ApiState loading={detail.loading} error={detail.error} empty={items.length === 0} emptyText="No items." onRetry={detail.reload} />
+      </div>
+    );
+  }
   return (
-    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
-      <path d="M21 3v5h-5" />
-      <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
-      <path d="M3 21v-5h5" />
-    </svg>
+    <ul className="mt-4 space-y-2">
+      {items.map((it) => (
+        <li key={it.id} className="rounded-xl border border-border bg-card/40 p-3 text-sm">
+          <div className="font-semibold">{it.medicineName}</div>
+          <div className="text-muted-foreground">{it.dosage}{it.quantity !== null ? ` · qty ${it.quantity}` : ""}</div>
+          {it.instructions && <div className="text-xs text-muted-foreground">{it.instructions}</div>}
+          <div className="text-xs text-muted-foreground">Refills: {it.refills}</div>
+        </li>
+      ))}
+    </ul>
   );
 }
+
 
 /* =========================================================================
    MEDICINE MARKETPLACE VIEW
    ========================================================================= */
-function OrderDialog({
-  order,
-  onClose,
-}: {
-  order: { medicine: Medicine; pharmacy: Medicine["prices"][number] } | null;
-  onClose: () => void;
-}) {
-  const [qty, setQty] = useState(1);
-  // Initial fulfillment depends on the pharmacy's delivery availability.
-  // The component is keyed by medicine+pharmacy so it remounts per order.
-  const [fulfillment, setFulfillment] = useState<"delivery" | "pickup">(
-    order?.pharmacy.delivery ? "delivery" : "pickup"
-  );
-  const [address, setAddress] = useState("12 Oxford Road, Rosebank, Johannesburg, 2196");
-
-  if (!order) return null;
-  const { medicine, pharmacy } = order;
-  const total = pharmacy.price * qty;
-  const deliveryFee = fulfillment === "delivery" ? 25 : 0;
-  const grand = total + deliveryFee;
-
-  return (
-    <Dialog open={!!order} onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="glass-strong max-h-[90vh] overflow-y-auto sm:max-w-md">
-        <DialogHeader>
-          <DialogTitle className="font-display text-xl">Place order</DialogTitle>
-          <DialogDescription>{medicine.name} · {medicine.strength} · {medicine.pack}</DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4">
-          <div className="flex items-center justify-between rounded-xl border border-border bg-card/40 p-3">
-            <div className="flex items-center gap-3">
-              <span className="grid h-10 w-10 place-items-center rounded-lg bg-medical/10 text-medical">
-                <Building2 className="h-5 w-5" />
-              </span>
-              <div>
-                <div className="text-sm font-semibold">{pharmacy.pharmacy}</div>
-                <div className="text-xs text-muted-foreground">{pharmacy.distanceKm} km away</div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-lg font-bold text-gradient">{formatRand(pharmacy.price)}</div>
-              <div className="text-[0.65rem] text-muted-foreground">per pack</div>
-            </div>
-          </div>
-
-          <div>
-            <Label className="mb-1.5 block text-xs font-medium">Quantity</Label>
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setQty((q) => Math.max(1, q - 1))}
-                className="grid h-10 w-10 place-items-center rounded-lg border border-border hover:border-medical/50"
-                aria-label="Decrease quantity"
-              >
-                –
-              </button>
-              <Input
-                type="number"
-                value={qty}
-                onChange={(e) => setQty(Math.max(1, parseInt(e.target.value) || 1))}
-                className="input-premium h-10 text-center"
-              />
-              <button
-                onClick={() => setQty((q) => q + 1)}
-                className="grid h-10 w-10 place-items-center rounded-lg border border-border hover:border-medical/50"
-                aria-label="Increase quantity"
-              >
-                +
-              </button>
-            </div>
-          </div>
-
-          <div>
-            <Label className="mb-1.5 block text-xs font-medium">Fulfillment</Label>
-            <RadioGroup
-              value={fulfillment}
-              onValueChange={(v) => setFulfillment(v as any)}
-              className="grid grid-cols-2 gap-2"
-            >
-              <label className={cn("flex cursor-pointer items-center gap-2 rounded-lg border p-3 transition", fulfillment === "delivery" ? "border-medical bg-medical/10" : "border-border")}>
-                <RadioGroupItem value="delivery" disabled={!pharmacy.delivery} />
-                <Truck className="h-4 w-4 text-medical" />
-                <span className="text-sm font-medium">Delivery</span>
-              </label>
-              <label className={cn("flex cursor-pointer items-center gap-2 rounded-lg border p-3 transition", fulfillment === "pickup" ? "border-medical bg-medical/10" : "border-border")}>
-                <RadioGroupItem value="pickup" />
-                <Package className="h-4 w-4 text-medical" />
-                <span className="text-sm font-medium">Pickup</span>
-              </label>
-            </RadioGroup>
-            {!pharmacy.delivery && (
-              <div className="mt-1.5 text-[0.7rem] text-amber-600 dark:text-amber-400">
-                This pharmacy doesn't offer delivery — pickup only.
-              </div>
-            )}
-          </div>
-
-          {fulfillment === "delivery" && (
-            <div>
-              <Label className="mb-1.5 block text-xs font-medium">Delivery address</Label>
-              <Textarea
-                value={address}
-                onChange={(e) => setAddress(e.target.value)}
-                className="input-premium min-h-[64px] resize-none"
-              />
-              <div className="mt-1 text-[0.7rem] text-muted-foreground">Estimated delivery: 30–45 min</div>
-            </div>
-          )}
-
-          {medicine.requiresPrescription && (
-            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-amber-700 dark:text-amber-300">
-              <FileCheck className="mt-0.5 h-4 w-4 shrink-0" />
-              <div className="text-xs">
-                <div className="font-semibold">Prescription required</div>
-                <div className="text-amber-600/80 dark:text-amber-400/80">
-                  Schedule {medicine.schedule} medicine. Your active prescription from Dr. Dlamini will be auto-attached.
-                </div>
-              </div>
-            </div>
-          )}
-
-          <div className="rounded-xl border border-border bg-card/40 p-3 text-sm">
-            <div className="flex justify-between py-0.5">
-              <span className="text-muted-foreground">Subtotal ({qty} × {formatRand(pharmacy.price)})</span>
-              <span className="font-medium">{formatRand(total)}</span>
-            </div>
-            {fulfillment === "delivery" && (
-              <div className="flex justify-between py-0.5">
-                <span className="text-muted-foreground">Delivery fee</span>
-                <span className="font-medium">{formatRand(deliveryFee)}</span>
-              </div>
-            )}
-            <div className="mt-1.5 flex justify-between border-t border-border pt-1.5">
-              <span className="font-semibold">Total</span>
-              <span className="text-lg font-bold text-gradient">{formatRand(grand)}</span>
-            </div>
-          </div>
-        </div>
-
-        <DialogFooter>
-          <Button variant="ghost" onClick={onClose}>Cancel</Button>
-          <Button
-            onClick={() => {
-              toast.success("Order placed", {
-                description: `${qty} × ${medicine.name} from ${pharmacy.pharmacy}. ${fulfillment === "delivery" ? "Delivery in 30–45 min." : "Ready for pickup in 15 min."}`,
-              });
-              onClose();
-            }}
-            className="btn-primary gap-2"
-          >
-            <ShoppingCart className="h-4 w-4" /> Place order · {formatRand(grand)}
-          </Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
-
 function MedicineView({ preselectId }: { preselectId?: string }) {
   const [q, setQ] = useState("");
-  const [cat, setCat] = useState("All");
-  const [sort, setSort] = useState<"price" | "distance" | "stock">("price");
-  // preselectId is honored via initial state — the view remounts on tab change
-  // (AnimatePresence key={tab}) so the preselected medicine auto-expands.
+  const [search, setSearch] = useState("");
+  const [rxOnly, setRxOnly] = useState<"all" | "true" | "false">("all");
   const [expanded, setExpanded] = useState<string | null>(preselectId ?? null);
-  const [order, setOrder] = useState<{ medicine: Medicine; pharmacy: Medicine["prices"][number] } | null>(null);
 
-  const filtered = MEDICINES.filter((m) => {
-    const matchQ = !q || m.name.toLowerCase().includes(q.toLowerCase()) || m.generic.toLowerCase().includes(q.toLowerCase());
-    const matchCat = cat === "All" || m.category === cat;
-    return matchQ && matchCat;
-  });
-
-  const sortPrices = (prices: Medicine["prices"]) => {
-    const arr = [...prices];
-    if (sort === "price") arr.sort((a, b) => a.price - b.price);
-    else if (sort === "distance") arr.sort((a, b) => a.distanceKm - b.distanceKm);
-    else if (sort === "stock") arr.sort((a, b) => Number(b.inStock) - Number(a.inStock));
-    return arr;
-  };
+  const params = new URLSearchParams({ pageSize: "100" });
+  if (search.length >= 2) params.set("q", search);
+  if (rxOnly !== "all") params.set("requiresPrescription", rxOnly);
+  const medicines = useApi<MedicineDto[]>(`/api/medicines?${params.toString()}`);
+  const list = medicines.data ?? [];
 
   return (
     <div>
       <ViewHeader
-        title="Order medicine"
-        subtitle="Compare prices across pharmacies and get delivery in 30 minutes."
+        title="Medicines"
+        subtitle="Look up medicines and compare sample pharmacy prices. Online ordering isn't available yet."
       />
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
+      <div className="mb-4 flex items-start gap-3 rounded-2xl border border-amber-500/30 bg-amber-500/10 p-4 text-sm text-amber-700 dark:text-amber-300" role="note">
+        <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+        <span>
+          <strong>Demo prices.</strong> Prices shown here are sample data for this prototype, not current retail prices.
+          Always confirm the price with the pharmacy.
+        </span>
+      </div>
+
+      <form
+        className="mb-4 flex flex-wrap items-center gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setSearch(q.trim());
+        }}
+      >
         <div className="input-premium flex h-10 flex-1 items-center gap-2 px-3 sm:max-w-sm">
           <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search medicines or generics…"
+            onBlur={() => setSearch(q.trim())}
+            placeholder="Search medicines (2+ letters)…"
             className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
         </div>
         <div className="flex items-center gap-2">
           <Filter className="h-4 w-4 text-muted-foreground" />
-          <Select value={sort} onValueChange={(v) => setSort(v as any)}>
-            <SelectTrigger className="input-premium h-10 w-[150px]"><SelectValue /></SelectTrigger>
+          <Select value={rxOnly} onValueChange={(v) => setRxOnly(v as "all" | "true" | "false")}>
+            <SelectTrigger className="input-premium h-10 w-[190px]"><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="price">Sort: Lowest price</SelectItem>
-              <SelectItem value="distance">Sort: Nearest</SelectItem>
-              <SelectItem value="stock">Sort: In stock</SelectItem>
+              <SelectItem value="all">All medicines</SelectItem>
+              <SelectItem value="true">Prescription only</SelectItem>
+              <SelectItem value="false">Over the counter</SelectItem>
             </SelectContent>
           </Select>
         </div>
-      </div>
+      </form>
 
-      <div className="mb-5 flex flex-wrap gap-1.5">
-        {MED_CATEGORIES.map((c) => (
-          <button
-            key={c}
-            onClick={() => setCat(c)}
-            className={cn(
-              "rounded-full border px-3 py-1.5 text-xs font-medium transition",
-              cat === c
-                ? "border-medical bg-medical text-white"
-                : "border-border bg-card/40 hover:border-medical/40"
-            )}
-          >
-            {c}
-          </button>
-        ))}
-      </div>
-
-      <div className="space-y-3">
-        {filtered.map((m, i) => {
-          const isOpen = expanded === m.id;
-          const prices = sortPrices(m.prices);
-          const cheapest = [...m.prices].sort((a, b) => a.price - b.price)[0];
-          return (
-            <motion.div
-              key={m.id}
-              initial={{ opacity: 0, y: 12 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.3, delay: i * 0.04 }}
-              className="glass-panel overflow-hidden"
-            >
-              <button
-                onClick={() => setExpanded(isOpen ? null : m.id)}
-                className="flex w-full items-center gap-4 p-4 text-left"
+      {medicines.error || medicines.loading || list.length === 0 ? (
+        <ApiState
+          loading={medicines.loading && !medicines.data}
+          error={medicines.error}
+          empty={list.length === 0}
+          emptyText="No medicines found. Try a different search."
+          onRetry={medicines.reload}
+        />
+      ) : (
+        <div className="space-y-3">
+          {list.map((m, i) => {
+            const isOpen = expanded === m.id;
+            return (
+              <motion.div
+                key={m.id}
+                initial={{ opacity: 0, y: 12 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.3, delay: i * 0.04 }}
+                className="glass-panel overflow-hidden"
               >
-                <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-medical to-cyan-400 text-white shadow-lg">
-                  <Pill className="h-5 w-5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-display text-base font-semibold">{m.name}</span>
-                    <span className="chip">{m.strength}</span>
-                    {m.requiresPrescription && (
-                      <span className="chip border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
-                        <FileCheck className="h-3 w-3" /> Rx · S{m.schedule}
-                      </span>
-                    )}
-                  </div>
-                  <div className="mt-0.5 truncate text-xs text-muted-foreground">
-                    {m.generic} · {m.form} · {m.pack} · {m.category}
-                  </div>
-                </div>
-                <div className="hidden text-right sm:block">
-                  <div className="text-[0.65rem] uppercase tracking-wider text-muted-foreground">From</div>
-                  <div className="text-lg font-bold text-gradient">{formatRand(cheapest.price)}</div>
-                </div>
-                <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition", isOpen && "rotate-180")} />
-              </button>
-
-              <AnimatePresence initial={false}>
-                {isOpen && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.25 }}
-                  >
-                    <div className="border-t border-border/60 p-4">
-                      <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Price comparison · {prices.length} pharmacies
-                      </div>
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="text-left text-[0.7rem] uppercase tracking-wider text-muted-foreground">
-                              <th className="px-2 py-2 font-semibold">Pharmacy</th>
-                              <th className="px-2 py-2 font-semibold">Price</th>
-                              <th className="px-2 py-2 font-semibold">Stock</th>
-                              <th className="px-2 py-2 font-semibold">Delivery</th>
-                              <th className="px-2 py-2 font-semibold">Distance</th>
-                              <th className="px-2 py-2 text-right font-semibold"></th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {prices.map((p, idx) => (
-                              <tr key={p.pharmacy} className="border-t border-border/40">
-                                <td className="px-2 py-2.5">
-                                  <div className="flex items-center gap-2">
-                                    <span className="grid h-7 w-7 place-items-center rounded-md bg-foreground/5 text-[0.6rem] font-bold text-muted-foreground">
-                                      {p.pharmacy.slice(0, 2).toUpperCase()}
-                                    </span>
-                                    <span className="font-medium">{p.pharmacy}</span>
-                                    {idx === 0 && sort === "price" && (
-                                      <span className="chip border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                                        <BadgeCheck className="h-3 w-3" /> Cheapest
-                                      </span>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="px-2 py-2.5 font-semibold">{formatRand(p.price)}</td>
-                                <td className="px-2 py-2.5">
-                                  {p.inStock ? (
-                                    <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
-                                      <span className="status-dot bg-emerald-400" style={{ background: "#34d399" }} /> In stock
-                                    </span>
-                                  ) : (
-                                    <span className="inline-flex items-center gap-1 text-xs text-rose-500">
-                                      <span className="h-1.5 w-1.5 rounded-full bg-rose-400" /> Out
-                                    </span>
-                                  )}
-                                </td>
-                                <td className="px-2 py-2.5">
-                                  {p.delivery ? (
-                                    <span className="inline-flex items-center gap-1 text-xs text-medical"><Truck className="h-3 w-3" /> Yes</span>
-                                  ) : (
-                                    <span className="text-xs text-muted-foreground">Pickup only</span>
-                                  )}
-                                </td>
-                                <td className="px-2 py-2.5 text-muted-foreground">{p.distanceKm} km</td>
-                                <td className="px-2 py-2.5 text-right">
-                                  <Button
-                                    size="sm"
-                                    disabled={!p.inStock}
-                                    onClick={() => setOrder({ medicine: m, pharmacy: p })}
-                                    className="btn-primary gap-1.5 rounded-lg px-3"
-                                  >
-                                    <ShoppingCart className="h-3.5 w-3.5" /> Order
-                                  </Button>
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
+                <button onClick={() => setExpanded(isOpen ? null : m.id)} className="flex w-full items-center gap-4 p-4 text-left">
+                  <span className="grid h-12 w-12 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-medical to-cyan-400 text-white shadow-lg">
+                    <Pill className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-display text-base font-semibold">{m.name}</span>
+                      {m.strength && <span className="chip">{m.strength}</span>}
+                      {m.requiresPrescription && (
+                        <span className="chip border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400">
+                          <FileCheck className="h-3 w-3" /> Prescription required
+                        </span>
+                      )}
+                      {m.source === "demo" && <span className="chip">Demo data</span>}
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </motion.div>
-          );
-        })}
-        {filtered.length === 0 && (
-          <div className="glass-panel grid place-items-center p-12 text-center">
-            <Search className="h-8 w-8 text-muted-foreground" />
-            <div className="mt-3 text-sm font-medium">No medicines found</div>
-            <div className="text-xs text-muted-foreground">Try a different search or category.</div>
-          </div>
-        )}
-      </div>
+                    <div className="mt-0.5 truncate text-xs text-muted-foreground">
+                      {[m.genericName, m.form, m.category].filter(Boolean).join(" · ")}
+                    </div>
+                  </div>
+                  <ChevronDown className={cn("h-5 w-5 shrink-0 text-muted-foreground transition", isOpen && "rotate-180")} />
+                </button>
+                {isOpen && <MedicinePrices medicineId={m.id} />}
+              </motion.div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
-      <OrderDialog
-        key={order ? order.medicine.id + order.pharmacy.pharmacy : "empty"}
-        order={order}
-        onClose={() => setOrder(null)}
-      />
+function MedicinePrices({ medicineId }: { medicineId: string }) {
+  const prices = useApi<MedicinePriceDto[]>(`/api/medicines/${medicineId}/prices?pageSize=100`);
+  const rows = prices.data ?? [];
+  return (
+    <div className="border-t border-border/60 p-4">
+      {prices.error || prices.loading || rows.length === 0 ? (
+        <ApiState loading={prices.loading} error={prices.error} empty={rows.length === 0} emptyText="No prices listed for this medicine." onRetry={prices.reload} />
+      ) : (
+        <>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+            Sample price comparison · {rows.length} entries
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-[0.7rem] uppercase tracking-wider text-muted-foreground">
+                  <th className="px-2 py-2 font-semibold">Pharmacy</th>
+                  <th className="px-2 py-2 font-semibold">Price</th>
+                  <th className="px-2 py-2 font-semibold">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((p) => (
+                  <tr key={p.id} className="border-t border-border/40">
+                    <td className="px-2 py-2.5 font-medium">{p.pharmacyName}</td>
+                    <td className="px-2 py-2.5 font-semibold">{formatPrice(p.amount, p.currency)}</td>
+                    <td className="px-2 py-2.5 text-xs text-muted-foreground">{priceLabel(p)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -1931,143 +1820,146 @@ function VideoView({ onStart }: { onStart: () => void }) {
    QUEUE VIEW
    ========================================================================= */
 function QueueView() {
-  const patientNo = CURRENT_TICKET.number;
-  const [nowServing, setNowServing] = useState(QUEUE_STATE.nowServing);
-  const [lastTick, setLastTick] = useState(Date.now());
+  const tickets = useApi<TicketDto[]>("/api/queue-tickets?status=waiting&pageSize=10");
+  const called = useApi<TicketDto[]>("/api/queue-tickets?status=called&pageSize=10");
+  const queues = useApi<QueueDto[]>("/api/queues?pageSize=100");
+  const [busy, setBusy] = useState(false);
+  const [leaving, setLeaving] = useState<TicketDto | null>(null);
+  const active = [...(called.data ?? []), ...(tickets.data ?? [])];
+  const ticket = active[0];
+  const reloadTickets = () => {
+    tickets.reload();
+    called.reload();
+  };
 
+  // Ticket positions change as others are served: refresh every 30 s while a ticket is open.
+  const ticketId = ticket?.id;
+  const reloadWaiting = tickets.reload;
+  const reloadCalled = called.reload;
   useEffect(() => {
+    if (!ticketId) return;
     const t = setInterval(() => {
-      setNowServing((n) => {
-        if (n >= patientNo - 1) return n;
-        return n + 1;
-      });
-      setLastTick(Date.now());
-    }, 8000);
+      reloadWaiting();
+      reloadCalled();
+    }, 30_000);
     return () => clearInterval(t);
-  }, [patientNo]);
+  }, [ticketId, reloadWaiting, reloadCalled]);
 
-  const ahead = Math.max(0, patientNo - nowServing - 1);
-  const isNext = nowServing === patientNo - 1;
-  const isCalled = nowServing >= patientNo;
+  const join = async (q: QueueDto) => {
+    setBusy(true);
+    try {
+      const { data } = await apiFetch<TicketDto>(`/api/queues/${q.id}/join`, { method: "POST", body: {} });
+      toast.success(`You're number ${data.ticketNumber}`, {
+        description: `${data.facilityName} · ${data.waitingAhead ?? 0} ahead of you.`,
+      });
+      reloadTickets();
+    } catch (error) {
+      toastApiError(error, "Could not join the queue");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const leave = async (t: TicketDto) => {
+    setBusy(true);
+    try {
+      await apiFetch<TicketDto>(`/api/queue-tickets/${t.id}/leave`, { method: "POST", body: {} });
+      toast.success("You left the queue", { description: t.facilityName });
+      reloadTickets();
+    } catch (error) {
+      toastApiError(error, "Could not leave the queue");
+    } finally {
+      setBusy(false);
+      setLeaving(null);
+    }
+  };
+
+  const ticketsError = tickets.error ?? called.error;
+  const ticketsLoading = (tickets.loading && !tickets.data) || (called.loading && !called.data);
 
   return (
     <div>
-      <ViewHeader
-        title="Your queue ticket"
-        subtitle="Live queue at Rosebank Clinic. We'll SMS you when it's your turn."
-        action={
-          <Link href="/service" className="btn-outline flex items-center gap-2 rounded-xl px-4 py-2 text-sm font-medium">
-            Full queue board <ArrowRight className="h-4 w-4" />
-          </Link>
-        }
-      />
+      <ViewHeader title="Queues" subtitle="Join a facility's queue for today and track your ticket." />
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Big ticket */}
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="glass-panel relative overflow-hidden p-6 lg:col-span-2"
-        >
+      {ticketsError || ticketsLoading ? (
+        <ApiState loading={ticketsLoading} error={ticketsError} empty={false} emptyText="" onRetry={reloadTickets} />
+      ) : ticket ? (
+        <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="glass-panel relative mb-6 overflow-hidden p-6">
           <div className="absolute -right-12 -top-12 h-48 w-48 rounded-full bg-medical/20 blur-3xl" />
           <div className="relative flex flex-col gap-6 sm:flex-row sm:items-center">
             <div className="flex-1">
-              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Your number
-              </div>
-              <div className="font-display text-[7rem] font-bold leading-none text-gradient-medical sm:text-[9rem]">
-                {patientNo}
-              </div>
+              <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Your number</div>
+              <div className="font-display text-[7rem] font-bold leading-none text-gradient-medical sm:text-[9rem]">{ticket.ticketNumber}</div>
               <div className="mt-2 flex flex-wrap items-center gap-2">
-                <StatusPill status={isCalled ? "serving" : isNext ? "called" : "waiting"} />
-                <span className="chip"><Clock className="h-3 w-3" /> ~{CURRENT_TICKET.estimatedWaitMin} min wait</span>
+                <StatusPill status={ticket.status} />
+                {ticket.waitingAhead !== null && (
+                  <span className="chip"><Clock className="h-3 w-3" /> {ticket.waitingAhead} ahead of you</span>
+                )}
               </div>
               <div className="mt-4 space-y-1 text-sm">
                 <div className="flex items-center gap-2 text-muted-foreground">
-                  <Building2 className="h-4 w-4" /> {CURRENT_TICKET.facility}
+                  <Building2 className="h-4 w-4" /> {ticket.facilityName}
                 </div>
                 <div className="flex items-center gap-2 text-muted-foreground">
-                  <Stethoscope className="h-4 w-4" /> {CURRENT_TICKET.service}
-                </div>
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Clock className="h-4 w-4" /> Issued {CURRENT_TICKET.issuedAt}
+                  <Clock className="h-4 w-4" /> Issued {sastParts(ticket.issuedAt).time} SAST · {ticket.serviceDate}
                 </div>
               </div>
             </div>
-
             <div className="flex flex-col items-center gap-3">
-              <div className="rounded-2xl border border-border bg-white p-3">
-                <QRTile size={168} />
-              </div>
-              <div className="text-center text-xs text-muted-foreground">
-                Scan at the clinic kiosk<br />to confirm your arrival
-              </div>
+              <Button variant="outline" disabled={busy} onClick={() => setLeaving(ticket)} className="rounded-xl text-rose-500">
+                Leave queue
+              </Button>
+              <Button variant="ghost" size="sm" onClick={reloadTickets} className="rounded-lg">Refresh</Button>
             </div>
           </div>
         </motion.div>
+      ) : null}
 
-        {/* Live queue state */}
-        <motion.div
-          initial={{ opacity: 0, y: 16 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.08 }}
-          className="glass-panel p-5"
-        >
-          <div className="mb-4 flex items-center justify-between">
-            <h3 className="font-display text-lg font-semibold">Live queue</h3>
-            <span className="flex items-center gap-1.5 text-[0.7rem] text-muted-foreground">
-              <span className="status-dot bg-emerald-400" style={{ background: "#34d399" }} /> Updated {Math.max(0, Math.floor((Date.now() - lastTick) / 1000))}s ago
-            </span>
-          </div>
-
-          <div className="rounded-2xl border border-medical/20 bg-medical/5 p-4">
-            <div className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Now serving</div>
-            <div className="font-display text-5xl font-bold text-gradient">#{nowServing}</div>
-            {isNext && (
-              <div className="mt-2 rounded-lg bg-amber-500/15 px-3 py-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
-                You're next! Please proceed to the waiting area.
+      <h3 className="mb-3 font-display text-lg font-semibold">Facilities taking tickets today</h3>
+      {queues.error || queues.loading || (queues.data ?? []).length === 0 ? (
+        <ApiState
+          loading={queues.loading && !queues.data}
+          error={queues.error}
+          empty={(queues.data ?? []).length === 0}
+          emptyText="No facilities are taking queue tickets yet."
+          onRetry={queues.reload}
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+          {(queues.data ?? []).map((q) => {
+            const mine = active.some((t) => t.facilityId === q.id);
+            return (
+              <div key={q.id} className="glass-panel flex items-center gap-4 p-4">
+                <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-medical/10 text-medical">
+                  <Building2 className="h-5 w-5" />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-semibold">{q.name}</div>
+                  <div className="truncate text-xs text-muted-foreground">{q.city}, {q.province} · {q.serviceDate}</div>
+                </div>
+                <Button size="sm" disabled={busy || mine} onClick={() => join(q)} className="btn-primary rounded-lg">
+                  {mine ? "Joined" : "Join"}
+                </Button>
               </div>
-            )}
-          </div>
-
-          <div className="mt-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">People ahead</span>
-              <span className="text-lg font-bold">{ahead}</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">Avg wait per person</span>
-              <span className="text-lg font-bold">{QUEUE_STATE.avgWaitMin} min</span>
-            </div>
-            <div className="flex items-center justify-between">
-              <span className="text-sm text-muted-foreground">In queue total</span>
-              <span className="text-lg font-bold">{QUEUE_STATE.totalInQueue}</span>
-            </div>
-            <Progress value={((nowServing - (patientNo - QUEUE_STATE.totalAhead - 1)) / (QUEUE_STATE.totalAhead + 1)) * 100} className="h-2" />
-          </div>
-        </motion.div>
-      </div>
-
-      {/* Missed-turn rule */}
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        transition={{ delay: 0.16 }}
-        className="glass-panel mt-6 flex items-start gap-4 p-5"
-      >
-        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-amber-500/15 text-amber-600 dark:text-amber-400">
-          <AlertCircle className="h-5 w-5" />
-        </span>
-        <div>
-          <div className="font-semibold">Missed your turn?</div>
-          <p className="mt-1 text-sm text-muted-foreground">
-            If you miss your number when called, speak to the reception desk — you'll be re-queued
-            after the next <strong className="text-foreground">5 patients</strong>. This keeps the
-            queue fair for everyone. You'll receive an SMS 2 numbers before yours, so you have time
-            to reach the consulting room.
-          </p>
+            );
+          })}
         </div>
-      </motion.div>
+      )}
+
+      <AlertDialog open={!!leaving} onOpenChange={(v) => !v && setLeaving(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Leave the queue?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {leaving ? `You'll lose ticket ${leaving.ticketNumber} at ${leaving.facilityName}.` : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={busy}>Stay</AlertDialogCancel>
+            <AlertDialogAction disabled={busy} onClick={() => leaving && leave(leaving)}>Leave queue</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -2583,19 +2475,10 @@ function PatientDashboardInner() {
     });
   };
 
-  const joinFromAppt = (a: any) => {
-    setVideoAppt({
-      doctor: a.doctor,
-      specialty: a.specialty,
-      date: a.date,
-      time: a.time,
-    });
-  };
-
   const renderTab = () => {
     switch (tab) {
       case "appointments":
-        return <AppointmentsView onJoinVideo={joinFromAppt} />;
+        return <AppointmentsView />;
       case "records":
         return <RecordsView />;
       case "prescriptions":
