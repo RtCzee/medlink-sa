@@ -1,0 +1,529 @@
+openapi: 3.1.0
+info:
+  title: MedLink SA API
+  version: 0.2.0
+  summary: JSON API served by the MedLink SA Next.js app (web/src/app/api).
+  description: |
+    Documents only the endpoints that are implemented. Conventions (envelope,
+    error codes, auth, caching, rate limits) are in api/docs/conventions.md.
+
+    Every response carries an `x-request-id` header (echoed when the client sends a
+    valid one) and errors include the same value as `requestId`.
+servers:
+  - url: http://localhost:3000
+    description: Local development (cd web && npm run dev)
+tags:
+  - name: Profile
+    description: The signed-in user's own profile.
+  - name: Settings
+    description: The signed-in user's own app settings.
+  - name: Directory
+    description: Public facility and practitioner directory (no sign-in required).
+
+# Private by default; public operations override with `security: []`.
+security:
+  - cookieSession: []
+  - bearerAuth: []
+
+paths:
+  /api/profile:
+    get:
+      tags: [Profile]
+      operationId: getProfile
+      summary: Get my profile
+      responses:
+        "200":
+          description: The caller's profile.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Profile" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    patch:
+      tags: [Profile]
+      operationId: updateProfile
+      summary: Update my name and/or phone
+      description: |
+        Only `fullName` and `phone` are editable. `email` changes go through Supabase
+        Auth; `role`, `id` and timestamps are database-owned. Any other field is a 400.
+        Cookie-authenticated requests must be same-origin. Limited to 20 writes per
+        user per minute per server instance.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ProfileUpdate" }
+            example: { fullName: Thandiwe Mokoena, phone: "+27 82 123 4567" }
+      responses:
+        "200":
+          description: The updated profile.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Profile" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/settings:
+    get:
+      tags: [Settings]
+      operationId: getSettings
+      summary: Get my settings
+      responses:
+        "200":
+          description: The caller's settings.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Settings" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    patch:
+      tags: [Settings]
+      operationId: updateSettings
+      summary: Update my settings
+      description: A missing settings row is 404 SETTINGS_NOT_FOUND; it is never created here.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SettingsUpdate" }
+            example: { language: zu, theme: dark }
+      responses:
+        "200":
+          description: The updated settings.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Settings" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/facilities:
+    get:
+      tags: [Directory]
+      operationId: listFacilities
+      summary: List facilities (public)
+      description: |
+        Public. A session, if sent, is ignored. Ordered by name, then id. Unknown or
+        repeated query parameters are a 400.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: type
+          in: query
+          schema: { $ref: "#/components/schemas/FacilityType" }
+        - name: province
+          in: query
+          description: Exact, case-sensitive match (uses the province index), e.g. `Gauteng`.
+          schema: { type: string, minLength: 1, maxLength: 50 }
+        - name: city
+          in: query
+          description: Case-insensitive exact match.
+          schema: { type: string, minLength: 1, maxLength: 100 }
+        - $ref: "#/components/parameters/NameSearch"
+      responses:
+        "200":
+          description: One page of facilities.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/PublicCacheControl" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Facility" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+              example:
+                data:
+                  - id: 3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f
+                    name: Chris Hani Baragwanath Hospital
+                    type: hospital
+                    province: Gauteng
+                    city: Soweto
+                    address: 26 Chris Hani Rd
+                    phone: "+27 11 933 8000"
+                    latitude: -26.2605
+                    longitude: 27.9433
+                meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/facilities/{id}:
+    get:
+      tags: [Directory]
+      operationId: getFacility
+      summary: Get a facility (public)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The facility.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/PublicCacheControl" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Facility" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/practitioners:
+    get:
+      tags: [Directory]
+      operationId: listPractitioners
+      summary: List practitioners (public)
+      description: |
+        Public directory fields only. `profileId` and `licenseNumber` are never
+        returned. Ordered by fullName, then id.
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: facilityId
+          in: query
+          schema: { type: string, format: uuid }
+        - name: specialty
+          in: query
+          description: Case-insensitive exact match, e.g. `cardiology`.
+          schema: { type: string, minLength: 1, maxLength: 100 }
+        - $ref: "#/components/parameters/NameSearch"
+      responses:
+        "200":
+          description: One page of practitioners.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/PublicCacheControl" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Practitioner" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+              example:
+                data:
+                  - id: 8a7b6c5d-4e3f-4a1b-8c9d-0e1f2a3b4c5d
+                    fullName: Dr Sipho Dlamini
+                    specialty: Cardiology
+                    facilityId: 3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f
+                    facility: { id: 3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f, name: Chris Hani Baragwanath Hospital }
+                meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/practitioners/{id}:
+    get:
+      tags: [Directory]
+      operationId: getPractitioner
+      summary: Get a practitioner (public)
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The practitioner.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/PublicCacheControl" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Practitioner" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+components:
+  securitySchemes:
+    cookieSession:
+      type: apiKey
+      in: cookie
+      name: sb-<project-ref>-auth-token
+      description: |
+        Supabase session cookie set by the web app's sign-in (may be split into
+        `.0`, `.1` chunks). Used automatically by same-site browser requests.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Supabase access token (for the Android app and other clients). Takes precedence over cookies.
+
+  headers:
+    RequestId:
+      description: Request correlation id (generated, or echoed if the client sent a valid one).
+      schema: { type: string }
+    PublicCacheControl:
+      description: Successful directory responses only. Errors and private endpoints are `no-store`.
+      schema: { type: string, example: "public, max-age=60, s-maxage=300" }
+
+  parameters:
+    Id:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    Page:
+      name: page
+      in: query
+      description: 1-based page number.
+      schema: { type: integer, minimum: 1, maximum: 1000, default: 1 }
+    PageSize:
+      name: pageSize
+      in: query
+      schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+    NameSearch:
+      name: q
+      in: query
+      description: Case-insensitive "contains" search on the name (trimmed).
+      schema: { type: string, minLength: 2, maxLength: 100 }
+
+  schemas:
+    UserRole:
+      type: string
+      enum: [patient, doctor, pharmacy, hospital, admin]
+    FacilityType:
+      type: string
+      enum: [hospital, clinic, community_health_centre, pharmacy]
+    Profile:
+      type: object
+      required: [id, fullName, email, phone, role, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string, maxLength: 100 }
+        email: { type: [string, "null"], format: email, maxLength: 254 }
+        phone: { type: [string, "null"], maxLength: 32 }
+        role: { $ref: "#/components/schemas/UserRole" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    ProfileUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        fullName: { type: string, minLength: 1, maxLength: 100, description: Trimmed. }
+        phone:
+          type: [string, "null"]
+          maxLength: 32
+          pattern: "^\\+?[0-9() -]+$"
+          description: 7-15 digits; null clears it.
+    Settings:
+      type: object
+      required: [language, theme, notificationsEnabled, showEmergencyQr, updatedAt]
+      properties:
+        language: { type: string, enum: [en, zu, af, st] }
+        theme: { type: string, enum: [system, light, dark] }
+        notificationsEnabled: { type: boolean }
+        showEmergencyQr: { type: boolean }
+        updatedAt: { type: string, format: date-time }
+    SettingsUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        language: { type: string, enum: [en, zu, af, st] }
+        theme: { type: string, enum: [system, light, dark] }
+        notificationsEnabled: { type: boolean }
+        showEmergencyQr: { type: boolean }
+    Facility:
+      type: object
+      required: [id, name, type, province, city, address, phone, latitude, longitude]
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string, maxLength: 150 }
+        type: { $ref: "#/components/schemas/FacilityType" }
+        province: { type: string, maxLength: 50 }
+        city: { type: string, maxLength: 100 }
+        address: { type: [string, "null"], maxLength: 250 }
+        phone: { type: [string, "null"], maxLength: 32 }
+        latitude:
+          type: [number, "null"]
+          minimum: -90
+          maximum: 90
+          description: Stored as decimal(9,6); returned as a number rounded to 6 decimal places.
+        longitude:
+          type: [number, "null"]
+          minimum: -180
+          maximum: 180
+          description: Stored as decimal(9,6); returned as a number rounded to 6 decimal places.
+    Practitioner:
+      type: object
+      description: Public directory fields only (profileId and licenseNumber are never exposed).
+      required: [id, fullName, specialty, facilityId, facility]
+      properties:
+        id: { type: string, format: uuid }
+        fullName: { type: string, maxLength: 100 }
+        specialty: { type: string, maxLength: 100 }
+        facilityId: { type: [string, "null"], format: uuid }
+        facility:
+          oneOf:
+            - type: object
+              required: [id, name]
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: string }
+            - type: "null"
+    PageMeta:
+      type: object
+      required: [page, pageSize, total, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        pageSize: { type: integer, minimum: 1, maximum: 100 }
+        total: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+    ErrorIssue:
+      type: object
+      required: [path, code, message]
+      properties:
+        path: { type: string, description: Dot path of the field; empty for the whole body/query. }
+        code: { type: string }
+        message: { type: string }
+        keys:
+          type: array
+          items: { type: string }
+          description: Present for unrecognized_keys (the rejected field names).
+    ErrorCode:
+      type: string
+      enum:
+        - INVALID_JSON
+        - INVALID_BODY
+        - VALIDATION_FAILED
+        - UNAUTHENTICATED
+        - FORBIDDEN
+        - NOT_FOUND
+        - PROFILE_NOT_FOUND
+        - SETTINGS_NOT_FOUND
+        - FACILITY_NOT_FOUND
+        - PRACTITIONER_NOT_FOUND
+        - CONFLICT
+        - UNSUPPORTED_MEDIA_TYPE
+        - RATE_LIMITED
+        - INTERNAL_ERROR
+        - SERVICE_UNAVAILABLE
+    Error:
+      type: object
+      required: [error, requestId]
+      properties:
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code: { $ref: "#/components/schemas/ErrorCode" }
+            message: { type: string }
+            details:
+              type: array
+              items: { $ref: "#/components/schemas/ErrorIssue" }
+        requestId: { type: string }
+
+  responses:
+    BadRequest:
+      description: INVALID_JSON, INVALID_BODY or VALIDATION_FAILED (unknown/protected field, bad value, bad id, unknown or repeated query parameter).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error:
+              code: VALIDATION_FAILED
+              message: The query string is invalid.
+              details: [{ path: pageSize, code: too_big, message: "Too big: expected number to be <=100" }]
+            requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f
+    Unauthenticated:
+      description: No session, invalid/expired token, or malformed Authorization header.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: UNAUTHENTICATED, message: Sign in to continue. }, requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f }
+    Forbidden:
+      description: Cookie-authenticated write from another origin.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND or PRACTITIONER_NOT_FOUND.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: FACILITY_NOT_FOUND, message: No facility exists with that id. }, requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f }
+    UnsupportedMediaType:
+      description: Write without Content-Type application/json.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Too many writes (per server instance). See Retry-After.
+      headers:
+        Retry-After:
+          description: Seconds until the window resets.
+          schema: { type: integer }
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    InternalError:
+      description: Unexpected error. Generic message; details only in server logs (by requestId).
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { error: { code: INTERNAL_ERROR, message: Something went wrong. Please try again. }, requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f }
+    ServiceUnavailable:
+      description: Database or Supabase Auth unreachable.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

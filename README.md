@@ -20,6 +20,9 @@ A digital health platform built for South Africa — connecting patients, doctor
 
 ```
 medlink-sa/
+├── api/                       # API contract + docs (handlers live in web/src/app/api), see api/README.md
+│   ├── openapi/openapi.yaml   # OpenAPI 3.1 spec of the implemented endpoints
+│   └── docs/                  # conventions.md, endpoints.md
 ├── mobile/                    # Android app (Kotlin + Jetpack Compose), see mobile/README.md
 └── web/                       # Next.js website (everything below runs from here)
     ├── prisma/
@@ -30,7 +33,7 @@ medlink-sa/
     │   ├── app/
     │   │   ├── layout.tsx     # Root layout (providers)
     │   │   ├── page.tsx       # Landing page
-    │   │   ├── api/route.ts   # GET /api stub ("Hello, world!")
+    │   │   ├── api/           # JSON API: profile, settings, facilities, practitioners (+ GET /api stub)
     │   │   ├── sign-in/       # Auth pages
     │   │   ├── sign-up/
     │   │   ├── service/       # Service overview
@@ -39,8 +42,9 @@ medlink-sa/
     │   │   └── dashboard/     # patient, doctor, pharmacy, hospital, admin
     │   ├── components/        # ui/ (shadcn), layout/, landing/
     │   ├── hooks/
-    │   ├── lib/               # data.ts (mock data), db.ts (Prisma client), auth-context.tsx, lang-context.tsx, security.ts, utils.ts
+    │   ├── lib/               # api/ (shared API code), data.ts (mock data), db.ts (Prisma client), auth-context.tsx, lang-context.tsx, security.ts, utils.ts
     │   └── types/
+    ├── tests/                 # Vitest unit tests (mocked) + OpenAPI contract test
     ├── next.config.mjs
     ├── tailwind.config.ts
     ├── tsconfig.json
@@ -150,6 +154,7 @@ Run from `web/`:
 | `npm run build` | Production build (`next build --webpack`, standalone output) |
 | `npm run start` | Start production server |
 | `npm run lint` | Run ESLint |
+| `npm test` | Run the Vitest unit tests (mocked; no database or network) and the OpenAPI contract test |
 | `npm run db:validate` | Validate the Prisma schema |
 | `npm run db:format` | Format the Prisma schema |
 | `npm run db:generate` | Generate Prisma client |
@@ -158,7 +163,7 @@ Run from `web/`:
 | `npm run db:migrate:status` | Show migration status |
 | `npm run db:migrate:diff` | Print the full schema as SQL (diff from an empty database) |
 
-There are no automated tests yet.
+`npm test` runs the Vitest suite in `web/tests/`. Supabase and Prisma are mocked, so it needs no database.
 
 ## Continuous integration
 
@@ -169,7 +174,7 @@ GitHub Actions runs `.github/workflows/ci.yml` on every push and pull request to
 | `web` | ubuntu-latest, Node 24 | `npm ci`, `npx prisma validate` (placeholder connection strings, no database) and `npm run build` in `web/`. `npm run lint` also runs but is **non-blocking** (`continue-on-error`) because of 6 existing `react-hooks/set-state-in-effect` errors. |
 | `android` | ubuntu-latest, Temurin JDK 21 | `./gradlew assembleDebug test` in `mobile/`, then uploads the debug APK as the `medlink-debug-apk` artifact |
 
-There are no automated tests yet in either app, so the `test` task currently has nothing to run.
+CI does not run the web unit tests (`npm test`) yet. The Android app has no automated tests yet, so its `test` task currently has nothing to run.
 ## Mobile app
 
 The Android app lives in `mobile/`. Open that folder in Android Studio and run the `app` configuration, or build from the command line:
