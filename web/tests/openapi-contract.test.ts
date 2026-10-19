@@ -17,12 +17,33 @@ const HTTP_METHODS = ["get", "post", "put", "patch", "delete", "head", "options"
 // of the public contract; candidate for removal.
 const UNDOCUMENTED_ALLOWED = new Set(["/api"]);
 
+type Parameter = { name?: string; in?: string; $ref?: string };
+type Operation = {
+  security?: unknown[];
+  parameters?: Parameter[];
+  responses?: Record<string, { headers?: Record<string, { $ref?: string }> }>;
+};
 type Spec = {
   openapi: string;
-  paths: Record<string, Partial<Record<(typeof HTTP_METHODS)[number], { security?: unknown[] }>>>;
+  paths: Record<string, Partial<Record<(typeof HTTP_METHODS)[number], Operation>>>;
+  components?: {
+    parameters?: Record<string, Parameter>;
+    schemas?: Record<string, { enum?: string[] }>;
+  };
 };
 
 const spec = parse(readFileSync(specPath, "utf8")) as Spec;
+
+function resolveParameter(p: Parameter): Parameter {
+  const name = p.$ref?.match(/^#\/components\/parameters\/(.+)$/)?.[1];
+  return name ? (spec.components?.parameters?.[name] ?? {}) : p;
+}
+
+function operations(): Array<[string, string, Operation]> {
+  return Object.entries(spec.paths).flatMap(([path, ops]) =>
+    HTTP_METHODS.filter((m) => ops[m]).map((m): [string, string, Operation] => [path, m, ops[m]!])
+  );
+}
 
 function routeFileFor(path: string): string {
   const segments = path
@@ -85,5 +106,41 @@ describe("OpenAPI contract (static)", () => {
         else expect(op.security, `${method} ${path}`).toBeUndefined(); // inherits global security
       }
     }
+  });
+
+  it("private operations document the 401 response", () => {
+    for (const [path, method, op] of operations()) {
+      if (op.security === undefined) expect(op.responses, `${method} ${path}`).toHaveProperty("401");
+    }
+  });
+
+  it("every {param} in a path is declared as a path parameter on each operation", () => {
+    for (const [path, method, op] of operations()) {
+      const templated = [...path.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+      const declared = (op.parameters ?? [])
+        .map(resolveParameter)
+        .filter((p) => p.in === "path")
+        .map((p) => p.name)
+        .sort();
+      expect(declared, `${method} ${path}`).toEqual(templated);
+    }
+  });
+
+  it("2xx responses document caching: no-store for private operations, public cache for the directory", () => {
+    for (const [path, method, op] of operations()) {
+      const expected = op.security === undefined ? "#/components/headers/NoStore" : "#/components/headers/PublicCacheControl";
+      for (const [status, response] of Object.entries(op.responses ?? {})) {
+        if (!/^2\d\d$/.test(status) || status === "204") continue;
+        expect(response.headers?.["Cache-Control"]?.$ref, `${method} ${path} ${status}`).toBe(expected);
+      }
+    }
+  });
+
+  it("the documented ErrorCode enum matches the codes in errors.ts", () => {
+    const source = readFileSync(join(webRoot, "src", "lib", "api", "errors.ts"), "utf8");
+    const union = source.match(/export type ApiErrorCode =([\s\S]*?);/)?.[1] ?? "";
+    const codes = [...union.matchAll(/"([A-Z_]+)"/g)].map((m) => m[1]).sort();
+    expect(codes.length).toBeGreaterThan(0);
+    expect([...(spec.components?.schemas?.ErrorCode?.enum ?? [])].sort()).toEqual(codes);
   });
 });

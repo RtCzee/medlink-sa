@@ -11,7 +11,12 @@ export type ApiErrorCode =
   | "SETTINGS_NOT_FOUND"
   | "FACILITY_NOT_FOUND"
   | "PRACTITIONER_NOT_FOUND"
+  | "APPOINTMENT_NOT_FOUND"
+  | "MEDICAL_RECORD_NOT_FOUND"
   | "CONFLICT"
+  | "APPOINTMENT_CONFLICT"
+  | "APPOINTMENT_NOT_EDITABLE"
+  | "APPOINTMENT_NOT_CANCELLABLE"
   | "UNSUPPORTED_MEDIA_TYPE"
   | "RATE_LIMITED"
   | "INTERNAL_ERROR"
@@ -70,3 +75,17 @@ export const facilityNotFound = () =>
 
 export const practitionerNotFound = () =>
   new ApiError(404, "PRACTITIONER_NOT_FOUND", "No practitioner exists with that id.");
+
+/** Missing OR another patient's appointment: the same 404, so ids can't be probed. */
+export const appointmentNotFound = () =>
+  new ApiError(404, "APPOINTMENT_NOT_FOUND", "No appointment with that id was found.");
+
+export const appointmentNotEditable = (message: string) =>
+  new ApiError(409, "APPOINTMENT_NOT_EDITABLE", message);
+
+export const appointmentNotCancellable = (message: string) =>
+  new ApiError(409, "APPOINTMENT_NOT_CANCELLABLE", message);
+
+/** Missing OR another patient's record: the same 404, so ids can't be probed. */
+export const medicalRecordNotFound = () =>
+  new ApiError(404, "MEDICAL_RECORD_NOT_FOUND", "No medical record with that id was found.");

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MedLink SA API
-  version: 0.2.0
+  version: 0.4.0
   summary: JSON API served by the MedLink SA Next.js app (web/src/app/api).
   description: |
     Documents only the endpoints that are implemented. Conventions (envelope,
@@ -19,6 +19,16 @@ tags:
     description: The signed-in user's own app settings.
   - name: Directory
     description: Public facility and practitioner directory (no sign-in required).
+  - name: Appointments
+    description: |
+      The signed-in user's own appointments (patient scope). Times are ISO 8601 instants:
+      send them with an offset (SAST is +02:00, no DST); responses are UTC (`Z`).
+  - name: MedicalRecords
+    description: |
+      The signed-in patient's own medical records. Records are patient-authored (the
+      patient types them in, as on the Android Records screen): `provider` is free text
+      and is not verified. There are no attachments or files. Records can't be edited
+      or deleted through this API.
 
 # Private by default; public operations override with `security: []`.
 security:
@@ -36,6 +46,7 @@ paths:
           description: The caller's profile.
           headers:
             x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
           content:
             application/json:
               schema:
@@ -67,6 +78,7 @@ paths:
           description: The updated profile.
           headers:
             x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
           content:
             application/json:
               schema:
@@ -93,6 +105,7 @@ paths:
           description: The caller's settings.
           headers:
             x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
           content:
             application/json:
               schema:
@@ -120,6 +133,7 @@ paths:
           description: The updated settings.
           headers:
             x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
           content:
             application/json:
               schema:
@@ -292,6 +306,344 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
+  /api/appointments:
+    get:
+      tags: [Appointments]
+      operationId: listAppointments
+      summary: List my appointments
+      description: |
+        Only the caller's appointments. Ordered by scheduledAt, then id. `from` is
+        inclusive and `to` exclusive; both need a UTC offset. Unknown or repeated query
+        parameters are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/AppointmentStatus" }
+        - name: from
+          in: query
+          description: Earliest scheduledAt (inclusive), e.g. `2026-10-20T00:00:00+02:00`.
+          schema: { type: string, format: date-time }
+        - name: to
+          in: query
+          description: Latest scheduledAt (exclusive). Must be after `from`.
+          schema: { type: string, format: date-time }
+      responses:
+        "200":
+          description: One page of the caller's appointments.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/Appointment" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+              example:
+                data:
+                  - id: a1a1a1a1-b2b2-4c3c-8d4d-e5e5e5e5e5e5
+                    practitionerId: 8a7b6c5d-4e3f-4a1b-8c9d-0e1f2a3b4c5d
+                    practitionerName: Dr Sipho Dlamini
+                    specialty: Cardiology
+                    facilityId: 3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f
+                    facilityName: Chris Hani Baragwanath Hospital
+                    scheduledAt: "2026-10-20T07:30:00.000Z"
+                    reason: Check-up
+                    status: confirmed
+                    createdAt: "2026-10-19T08:00:00.000Z"
+                    updatedAt: "2026-10-19T09:15:00.000Z"
+                meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    post:
+      tags: [Appointments]
+      operationId: createAppointment
+      summary: Request an appointment
+      description: |
+        Books the caller (from the session) with a directory practitioner at the
+        practitioner's facility. Practitioner name, specialty and facility name are
+        copied from the directory; status starts as `requested` (database default).
+        patientId, status, names and timestamps are rejected (400).
+
+        `scheduledAt` must have a UTC offset, be on a whole minute, be in the future and
+        be at most 365 days ahead. A 409 is returned if the practitioner, or the caller,
+        already has a requested/confirmed appointment starting at the same instant
+        (there is no duration, so only identical start times are detected).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppointmentCreate" }
+            example:
+              practitionerId: 8a7b6c5d-4e3f-4a1b-8c9d-0e1f2a3b4c5d
+              scheduledAt: "2026-10-20T09:30:00+02:00"
+              reason: Check-up
+      responses:
+        "201":
+          description: The new appointment.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Appointment" }
+              examples:
+                created: { $ref: "#/components/examples/AppointmentRequestedEnvelope" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AppointmentConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/appointments/{id}:
+    get:
+      tags: [Appointments]
+      operationId: getAppointment
+      summary: Get one of my appointments
+      description: Another patient's appointment returns the same 404 as a missing one.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The appointment.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Appointment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    patch:
+      tags: [Appointments]
+      operationId: updateAppointment
+      summary: Change the reason or reschedule
+      description: |
+        Only upcoming `requested` or `confirmed` appointments can change (else 409
+        APPOINTMENT_NOT_EDITABLE).
+        - `reason`: editable while requested or confirmed; `null` clears it.
+        - `scheduledAt`: only while `requested` (a confirmed appointment must be
+          cancelled and re-requested), validated like creation, conflict-checked (409).
+        Status, practitioner, facility, patient and timestamps are rejected (400).
+        Sending the current scheduledAt is a no-op.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AppointmentUpdate" }
+            example: { scheduledAt: "2026-10-21T14:00:00+02:00", reason: Follow-up }
+      responses:
+        "200":
+          description: The updated appointment.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Appointment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AppointmentConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/appointments/{id}/cancel:
+    post:
+      tags: [Appointments]
+      operationId: cancelAppointment
+      summary: Cancel one of my appointments
+      description: |
+        `requested` or `confirmed`, still upcoming -> `cancelled`.
+        Already `cancelled`: 200 with the appointment unchanged (safe to retry).
+        `completed`, or the time has passed: 409 APPOINTMENT_NOT_CANCELLABLE.
+        Takes no body (an empty body or `{}`); any field is a 400.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: false, maxProperties: 0 }
+      responses:
+        "200":
+          description: The cancelled appointment.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Appointment" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/AppointmentConflict" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/medical-records:
+    get:
+      tags: [MedicalRecords]
+      operationId: listMedicalRecords
+      summary: List my medical records
+      description: |
+        Only the caller's records. Ordered by recordedOn (newest first), then createdAt
+        (newest first), then id. `from` and `to` are inclusive calendar dates. Unknown
+        or repeated query parameters (including `patientId`) are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: category
+          in: query
+          description: Exact category, case-insensitive (trimmed, 1-80 characters).
+          schema: { type: string, minLength: 1, maxLength: 80 }
+        - name: from
+          in: query
+          description: Earliest recordedOn (inclusive), `YYYY-MM-DD`, not before 1900-01-01.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Latest recordedOn (inclusive), `YYYY-MM-DD`. Must not be before `from`.
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: One page of the caller's records.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/MedicalRecord" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+              example:
+                data:
+                  - id: c3c3c3c3-d4d4-4e5e-8f6f-a7a7a7a7a7a7
+                    title: Blood test
+                    category: Lab result
+                    provider: Lancet Laboratories
+                    recordedOn: "2026-10-15"
+                    notes: Cholesterol slightly high
+                    createdAt: "2026-10-19T10:00:00.000Z"
+                    updatedAt: "2026-10-19T10:00:00.000Z"
+                meta: { page: 1, pageSize: 20, total: 1, totalPages: 1 }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+    post:
+      tags: [MedicalRecords]
+      operationId: createMedicalRecord
+      summary: Add a medical record (patients only)
+      description: |
+        Adds a record for the caller (from the session). Only users whose profile role
+        is `patient` may add records (403 otherwise). patientId, id, timestamps and any
+        other field are rejected (400). `recordedOn` is a calendar date, not before
+        1900-01-01 and not after today's date in South Africa (Africa/Johannesburg).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MedicalRecordCreate" }
+            example:
+              title: Blood test
+              category: Lab result
+              provider: Lancet Laboratories
+              recordedOn: "2026-10-15"
+              notes: Cholesterol slightly high
+      responses:
+        "201":
+          description: The new record.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/MedicalRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/medical-records/{id}:
+    get:
+      tags: [MedicalRecords]
+      operationId: getMedicalRecord
+      summary: Get one of my medical records
+      description: Another patient's record returns the same 404 as a missing one. Query parameters are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The record.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/MedicalRecord" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
 components:
   securitySchemes:
     cookieSession:
@@ -311,6 +663,9 @@ components:
     RequestId:
       description: Request correlation id (generated, or echoed if the client sent a valid one).
       schema: { type: string }
+    NoStore:
+      description: Private responses are never cached.
+      schema: { type: string, example: no-store }
     PublicCacheControl:
       description: Successful directory responses only. Errors and private endpoints are `no-store`.
       schema: { type: string, example: "public, max-age=60, s-maxage=300" }
@@ -337,6 +692,78 @@ components:
       schema: { type: string, minLength: 2, maxLength: 100 }
 
   schemas:
+    AppointmentStatus:
+      type: string
+      enum: [requested, confirmed, completed, cancelled]
+      description: New appointments are `requested`. Patients can only cancel; confirming and completing are not available through this API.
+    Appointment:
+      type: object
+      required: [id, practitionerId, practitionerName, specialty, facilityId, facilityName, scheduledAt, reason, status, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        practitionerId:
+          type: [string, "null"]
+          format: uuid
+          description: null if the practitioner was later removed from the directory.
+        practitionerName: { type: string, maxLength: 100, description: Copied from the directory at booking. }
+        specialty: { type: string, maxLength: 100 }
+        facilityId:
+          type: [string, "null"]
+          format: uuid
+          description: null if the facility was later removed.
+        facilityName: { type: string, maxLength: 150 }
+        scheduledAt: { type: string, format: date-time, description: UTC instant (`Z`). }
+        reason: { type: [string, "null"], maxLength: 500 }
+        status: { $ref: "#/components/schemas/AppointmentStatus" }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    AppointmentCreate:
+      type: object
+      additionalProperties: false
+      required: [practitionerId, scheduledAt]
+      properties:
+        practitionerId: { type: string, format: uuid }
+        facilityId:
+          type: string
+          format: uuid
+          description: Optional. Must be the practitioner's facility (400 otherwise; 404 if it doesn't exist).
+        scheduledAt:
+          type: string
+          format: date-time
+          description: With a UTC offset (`+02:00` or `Z`), seconds `00`, in the future, at most 365 days ahead.
+        reason: { type: [string, "null"], minLength: 1, maxLength: 500, description: Trimmed. }
+    AppointmentUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        scheduledAt:
+          type: string
+          format: date-time
+          description: Same rules as creation. Only while the appointment is `requested`.
+        reason: { type: [string, "null"], minLength: 1, maxLength: 500, description: Trimmed; null clears it. }
+    MedicalRecord:
+      type: object
+      required: [id, title, category, provider, recordedOn, notes, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        title: { type: string, maxLength: 120 }
+        category: { type: string, maxLength: 80, description: Free text chosen by the patient. }
+        provider: { type: [string, "null"], maxLength: 150, description: Free text entered by the patient; not verified and not linked to the directory. }
+        recordedOn: { type: string, format: date, description: Calendar date (`YYYY-MM-DD`). }
+        notes: { type: [string, "null"], maxLength: 2000 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    MedicalRecordCreate:
+      type: object
+      additionalProperties: false
+      required: [title, category, recordedOn]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 120, description: Trimmed. }
+        category: { type: string, minLength: 1, maxLength: 80, description: Trimmed. }
+        provider: { type: [string, "null"], minLength: 1, maxLength: 150, description: Trimmed. Self-reported. }
+        recordedOn: { type: string, format: date, description: "`YYYY-MM-DD`, from 1900-01-01 up to today's date in South Africa." }
+        notes: { type: [string, "null"], minLength: 1, maxLength: 2000, description: Trimmed. }
     UserRole:
       type: string
       enum: [patient, doctor, pharmacy, hospital, admin]
@@ -453,7 +880,12 @@ components:
         - SETTINGS_NOT_FOUND
         - FACILITY_NOT_FOUND
         - PRACTITIONER_NOT_FOUND
+        - APPOINTMENT_NOT_FOUND
         - CONFLICT
+        - APPOINTMENT_CONFLICT
+        - APPOINTMENT_NOT_EDITABLE
+        - APPOINTMENT_NOT_CANCELLABLE
+        - MEDICAL_RECORD_NOT_FOUND
         - UNSUPPORTED_MEDIA_TYPE
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -472,6 +904,23 @@ components:
               type: array
               items: { $ref: "#/components/schemas/ErrorIssue" }
         requestId: { type: string }
+
+  examples:
+    AppointmentRequestedEnvelope:
+      summary: A newly requested appointment
+      value:
+        data:
+          id: a1a1a1a1-b2b2-4c3c-8d4d-e5e5e5e5e5e5
+          practitionerId: 8a7b6c5d-4e3f-4a1b-8c9d-0e1f2a3b4c5d
+          practitionerName: Dr Sipho Dlamini
+          specialty: Cardiology
+          facilityId: 3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f
+          facilityName: Chris Hani Baragwanath Hospital
+          scheduledAt: "2026-10-20T07:30:00.000Z"
+          reason: Check-up
+          status: requested
+          createdAt: "2026-10-19T08:00:00.000Z"
+          updatedAt: "2026-10-19T08:00:00.000Z"
 
   responses:
     BadRequest:
@@ -492,16 +941,29 @@ components:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: { code: UNAUTHENTICATED, message: Sign in to continue. }, requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f }
     Forbidden:
-      description: Cookie-authenticated write from another origin.
+      description: Cookie-authenticated write from another origin, or a profile role that may not perform the action.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
-      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND or PRACTITIONER_NOT_FOUND.
+      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND, PRACTITIONER_NOT_FOUND, APPOINTMENT_NOT_FOUND or MEDICAL_RECORD_NOT_FOUND.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
           example: { error: { code: FACILITY_NOT_FOUND, message: No facility exists with that id. }, requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f }
+    AppointmentConflict:
+      description: |
+        APPOINTMENT_CONFLICT (the practitioner or you already have an active appointment
+        at that time), APPOINTMENT_NOT_EDITABLE or APPOINTMENT_NOT_CANCELLABLE.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            error:
+              code: APPOINTMENT_CONFLICT
+              message: That time is not available with this practitioner. Choose another time.
+              details: [{ path: scheduledAt, code: conflict, message: Time slot unavailable. }]
+            requestId: 6f0c1c9e-2b1a-4c1e-9d0f-3a2b1c0d9e8f
     UnsupportedMediaType:
       description: Write without Content-Type application/json.
       content:

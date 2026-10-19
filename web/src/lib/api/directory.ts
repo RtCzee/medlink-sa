@@ -29,7 +29,8 @@ const nameSearch = z
   .min(2, "Search text must be at least 2 characters.")
   .max(100, "Search text must be 100 characters or fewer.");
 
-const paginationShape = {
+/** page/pageSize query fields shared by every paginated list (also appointments). */
+export const paginationShape = {
   page: wholeNumber(1, MAX_PAGE).optional(),
   pageSize: wholeNumber(1, MAX_PAGE_SIZE).optional(),
 };
