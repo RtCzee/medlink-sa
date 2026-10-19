@@ -197,8 +197,13 @@ To turn on the online features, give the build the server addresses (see `mobile
 
 ### Vercel
 
-1. Connect the GitHub repo at [vercel.com](https://vercel.com) and set the project **Root Directory** to `web`.
-2. Deploy. Vercel runs `npm run build`.
+Recommended free host: **Vercel Hobby** (free, no card, no sleep; non-commercial use only, which suits this academic prototype). The web pages and the `/api` route handlers deploy together as one Next.js project.
+
+1. Sign in at [vercel.com](https://vercel.com) with GitHub and **Add New → Project → Import** `RtCzee/medlink-sa`. The repo owner may have to grant the Vercel GitHub app access to the repo first.
+2. Framework preset **Next.js**, **Root Directory** `web`. Leave the build command as `npm run build`; `postinstall` runs `prisma generate` so the Prisma client is never stale on Vercel's dependency cache.
+3. Add the environment variables (Production and Preview) with the values from `web/.env`, entered in the Vercel dashboard only: `DATABASE_URL` (Supabase transaction pooler, port 6543), `DIRECT_URL`, `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`, `SUPABASE_SECRET_KEY` (server-only, never `NEXT_PUBLIC_`).
+4. Deploy, then in Supabase → Authentication → URL Configuration add `https://<your-app>.vercel.app/auth/confirm` (and `https://<your-app>.vercel.app/**`) to the Redirect URLs, keeping `http://localhost:3000/**`.
+5. Point the Android release build at it with `medlink.apiBaseUrl=https://<your-app>.vercel.app` in `mobile/local.properties` or `-Pmedlink.apiBaseUrl=...`.
 
 ### Self-hosted (standalone build)
 
