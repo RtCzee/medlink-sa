@@ -8,6 +8,26 @@ import { ApiError, type ApiIssue } from "./errors";
 export type ApiContext = { requestId: string };
 export type ApiHandler = (request: Request, ctx: ApiContext) => Promise<Response>;
 
+/** Dynamic segments of a route, e.g. { id: string } for app/api/facilities/[id]. */
+export type RouteParams = Record<string, string>;
+export type ApiParamsContext<P extends RouteParams> = ApiContext & { params: P };
+export type ApiParamsHandler<P extends RouteParams> = (
+  request: Request,
+  ctx: ApiParamsContext<P>
+) => Promise<Response>;
+
+export type ApiOptions = {
+  /**
+   * Cache-Control for SUCCESSFUL (2xx) responses only. Use solely for public,
+   * non-personalised data whose route never reads cookies or auth headers and is
+   * excluded from the session-refresh proxy (so no Set-Cookie). Errors and every
+   * other route always get "no-store".
+   */
+  cacheControl?: string;
+};
+
+export type PageMeta = { page: number; pageSize: number; total: number; totalPages: number };
+
 export type ApiSuccessBody<T> = { data: T };
 export type ApiErrorBody = {
   error: { code: string; message: string; details?: ApiIssue[] };
@@ -21,6 +41,15 @@ const PRISMA_UNAVAILABLE_CODES = new Set(["P1001", "P1002", "P1008", "P1017", "P
 /** 200/201 JSON success response: { data }. */
 export function json<T>(data: T, status: 200 | 201 = 200): Response {
   return NextResponse.json<ApiSuccessBody<T>>({ data }, { status });
+}
+
+/** 200 paginated list: { data: [...], meta: { page, pageSize, total, totalPages } }. */
+export function jsonPage<T>(
+  items: T[],
+  { page, pageSize, total }: { page: number; pageSize: number; total: number }
+): Response {
+  const meta: PageMeta = { page, pageSize, total, totalPages: Math.ceil(total / pageSize) };
+  return NextResponse.json<ApiSuccessBody<T[]> & { meta: PageMeta }>({ data: items, meta });
 }
 
 export function noContent(): Response {
@@ -89,55 +118,87 @@ function log(level: "info" | "warn" | "error", entry: Record<string, unknown>) {
   else console.info(line);
 }
 
-export function withApi(route: string, handler: ApiHandler) {
-  return async function apiRoute(request: Request): Promise<Response> {
-    const started = Date.now();
-    const incoming = request.headers.get(REQUEST_ID_HEADER);
-    const requestId =
-      incoming && REQUEST_ID_PATTERN.test(incoming) ? incoming : crypto.randomUUID();
-
-    let response: Response;
-    let failure: unknown;
-    try {
-      response = await handler(request, { requestId });
-    } catch (error) {
-      failure = error;
-      const apiError =
-        toApiError(error) ??
-        new ApiError(500, "INTERNAL_ERROR", "Something went wrong. Please try again.");
-      const body: ApiErrorBody = {
-        error: {
-          code: apiError.code,
-          message: apiError.message,
-          ...(apiError.details ? { details: apiError.details } : {}),
-        },
-        requestId,
-      };
-      response = NextResponse.json(body, { status: apiError.status });
-      Object.entries(apiError.headers ?? {}).forEach(([key, value]) =>
-        response.headers.set(key, value)
-      );
-    }
-
-    // Every API response is private and per-user.
-    response.headers.set("Cache-Control", "no-store");
-    response.headers.set(REQUEST_ID_HEADER, requestId);
-
-    const entry: Record<string, unknown> = {
-      msg: "api_request",
-      requestId,
-      route,
-      method: request.method,
-      status: response.status,
-      durationMs: Date.now() - started,
-    };
-    if (failure !== undefined) {
-      // Name and code only: messages can contain SQL, ids or other internals.
-      entry.errorName = failure instanceof Error ? failure.name : typeof failure;
-      const code = failure instanceof ApiError ? failure.code : errorCodeOf(failure);
-      if (code) entry.errorCode = code;
-    }
-    log(response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info", entry);
-    return response;
+/** Wraps a handler for a route without dynamic segments. */
+export function withApi(route: string, handler: ApiHandler, options: ApiOptions = {}) {
+  return function apiRoute(request: Request): Promise<Response> {
+    return runApi(route, request, options, (requestId) => handler(request, { requestId }));
   };
+}
+
+/**
+ * Wraps a handler for a dynamic route (e.g. [id]). Next.js passes the segment
+ * values as a Promise; they are awaited inside the error boundary, so the handler
+ * receives plain values and must still validate them.
+ */
+export function withApiParams<P extends RouteParams>(
+  route: string,
+  handler: ApiParamsHandler<P>,
+  options: ApiOptions = {}
+) {
+  return function apiRoute(
+    request: Request,
+    routeContext: { params: Promise<P> }
+  ): Promise<Response> {
+    return runApi(route, request, options, async (requestId) =>
+      handler(request, { requestId, params: await routeContext.params })
+    );
+  };
+}
+
+async function runApi(
+  route: string,
+  request: Request,
+  options: ApiOptions,
+  invoke: (requestId: string) => Promise<Response>
+): Promise<Response> {
+  const started = Date.now();
+  const incoming = request.headers.get(REQUEST_ID_HEADER);
+  const requestId =
+    incoming && REQUEST_ID_PATTERN.test(incoming) ? incoming : crypto.randomUUID();
+
+  let response: Response;
+  let failure: unknown;
+  try {
+    response = await invoke(requestId);
+  } catch (error) {
+    failure = error;
+    const apiError =
+      toApiError(error) ??
+      new ApiError(500, "INTERNAL_ERROR", "Something went wrong. Please try again.");
+    const body: ApiErrorBody = {
+      error: {
+        code: apiError.code,
+        message: apiError.message,
+        ...(apiError.details ? { details: apiError.details } : {}),
+      },
+      requestId,
+    };
+    response = NextResponse.json(body, { status: apiError.status });
+    Object.entries(apiError.headers ?? {}).forEach(([key, value]) =>
+      response.headers.set(key, value)
+    );
+  }
+
+  // Private by default. Only successful responses of routes that opt in (public
+  // directory data) get a shared-cache policy.
+  const cacheable = options.cacheControl && response.status >= 200 && response.status < 300;
+  response.headers.set("Cache-Control", cacheable ? options.cacheControl! : "no-store");
+  response.headers.set(REQUEST_ID_HEADER, requestId);
+
+  const entry: Record<string, unknown> = {
+    msg: "api_request",
+    requestId,
+    route,
+    method: request.method,
+    status: response.status,
+    durationMs: Date.now() - started,
+  };
+  if (failure !== undefined) {
+    // Name and code only: messages can contain SQL, ids or other internals.
+    entry.errorName = failure instanceof Error ? failure.name : typeof failure;
+    const code = failure instanceof ApiError ? failure.code : errorCodeOf(failure);
+    if (code) entry.errorCode = code;
+  }
+  log(response.status >= 500 ? "error" : response.status >= 400 ? "warn" : "info", entry);
+  return response;
 }

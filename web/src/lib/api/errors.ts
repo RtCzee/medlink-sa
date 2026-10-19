@@ -9,6 +9,8 @@ export type ApiErrorCode =
   | "NOT_FOUND"
   | "PROFILE_NOT_FOUND"
   | "SETTINGS_NOT_FOUND"
+  | "FACILITY_NOT_FOUND"
+  | "PRACTITIONER_NOT_FOUND"
   | "CONFLICT"
   | "UNSUPPORTED_MEDIA_TYPE"
   | "RATE_LIMITED"
@@ -62,3 +64,9 @@ export const settingsNotFound = () =>
     "SETTINGS_NOT_FOUND",
     "Your settings could not be found. They are created when you register; contact support if this persists."
   );
+
+export const facilityNotFound = () =>
+  new ApiError(404, "FACILITY_NOT_FOUND", "No facility exists with that id.");
+
+export const practitionerNotFound = () =>
+  new ApiError(404, "PRACTITIONER_NOT_FOUND", "No practitioner exists with that id.");

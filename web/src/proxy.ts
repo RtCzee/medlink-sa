@@ -10,7 +10,11 @@ export async function proxy(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // Everything except Next.js internals and static files.
-    "/((?!_next/static|_next/image|favicon.ico|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|xml|webmanifest|woff2?)$).*)",
+    // Everything except Next.js internals, static files and the PUBLIC directory API
+    // (/api/facilities*, /api/practitioners*). Those routes never read the session,
+    // and skipping the refresh guarantees they never send Set-Cookie, so their
+    // responses can be cached publicly. Protected pages and /api/profile|settings
+    // still go through the proxy.
+    "/((?!_next/static|_next/image|favicon.ico|api/facilities(?:/|$)|api/practitioners(?:/|$)|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|txt|xml|webmanifest|woff2?)$).*)",
   ],
 };
