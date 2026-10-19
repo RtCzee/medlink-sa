@@ -53,6 +53,18 @@ enum AppointmentStatus {
   @@map("appointment_status")
 }
 
+/// Prescription lifecycle. New prescriptions are `active`; `completed` (fully dispensed or
+/// course finished), `cancelled` (withdrawn by the prescriber) and `expired` (past
+/// expires_on) are terminal. No API sets a status yet (no prescriber workflow).
+enum PrescriptionStatus {
+  active
+  completed
+  cancelled
+  expired
+
+  @@map("prescription_status")
+}
+
 enum QueueTicketStatus {
   waiting
   called
@@ -100,6 +112,7 @@ model Profile {
   appointments     Appointment[]
   medicalRecords   MedicalRecord[]
   queueTickets     QueueTicket[]
+  prescriptions    Prescription[]
 
   @@index([role])
   @@index([email])
@@ -156,6 +169,7 @@ model Facility {
   practitioners Practitioner[]
   appointments  Appointment[]
   queueTickets  QueueTicket[]
+  prescriptions Prescription[]
 
   @@index([type])
   @@index([province])
@@ -175,7 +189,8 @@ model Practitioner {
 
   profile      Profile?      @relation(fields: [profileId], references: [id], onDelete: SetNull)
   facility     Facility?     @relation(fields: [facilityId], references: [id], onDelete: SetNull)
-  appointments Appointment[]
+  appointments  Appointment[]
+  prescriptions Prescription[]
 
   @@index([facilityId])
   @@index([specialty])
@@ -202,6 +217,7 @@ model Appointment {
   patient      Profile       @relation(fields: [patientId], references: [id], onDelete: Cascade)
   practitioner Practitioner? @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
   facility     Facility?     @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+  prescriptions Prescription[]
 
   @@index([patientId, scheduledAt])
   @@index([practitionerId])
@@ -250,4 +266,55 @@ model QueueTicket {
   @@index([patientId, status])
   @@index([facilityId, serviceDate, status])
   @@map("queue_tickets")
+}
+
+// ─── Prescriptions ──────────────────────────────────────────
+
+/// Written by prescribers (no prescriber workflow or write policy exists yet); patients
+/// can only read their own (API and RLS). Practitioner, appointment and facility are
+/// optional links that survive deletion of the linked row (set null).
+model Prescription {
+  id             String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  patientId      String             @map("patient_id") @db.Uuid
+  practitionerId String?            @map("practitioner_id") @db.Uuid
+  appointmentId  String?            @map("appointment_id") @db.Uuid
+  facilityId     String?            @map("facility_id") @db.Uuid
+  status         PrescriptionStatus @default(active)
+  issuedOn       DateTime           @map("issued_on") @db.Date
+  /// CHECK expires_on >= issued_on (prescriptions migration).
+  expiresOn      DateTime?          @map("expires_on") @db.Date
+  notes          String?            @db.VarChar(1000)
+  createdAt      DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime           @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  patient      Profile            @relation(fields: [patientId], references: [id], onDelete: Cascade)
+  practitioner Practitioner?      @relation(fields: [practitionerId], references: [id], onDelete: SetNull)
+  appointment  Appointment?       @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+  facility     Facility?          @relation(fields: [facilityId], references: [id], onDelete: SetNull)
+  items        PrescriptionItem[]
+
+  @@index([patientId, issuedOn])
+  @@index([practitionerId])
+  @@index([appointmentId])
+  @@index([facilityId])
+  @@map("prescriptions")
+}
+
+model PrescriptionItem {
+  id             String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  prescriptionId String   @map("prescription_id") @db.Uuid
+  medicineName   String   @map("medicine_name") @db.VarChar(150)
+  dosage         String   @db.VarChar(100)
+  /// CHECK > 0 (prescriptions migration).
+  quantity       Int?
+  instructions   String?  @db.VarChar(500)
+  /// CHECK >= 0 (prescriptions migration).
+  refills        Int      @default(0)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  prescription Prescription @relation(fields: [prescriptionId], references: [id], onDelete: Cascade)
+
+  @@index([prescriptionId])
+  @@map("prescription_items")
 }

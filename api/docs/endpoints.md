@@ -26,6 +26,8 @@ Conventions are in [`conventions.md`](conventions.md).
 | GET | `/api/queue-tickets` | Private |
 | GET | `/api/queue-tickets/{id}` | Private |
 | POST | `/api/queue-tickets/{id}/leave` | Private |
+| GET | `/api/prescriptions` | Private |
+| GET | `/api/prescriptions/{id}` | Private |
 
 ## `GET /api/profile`
 
@@ -423,6 +425,51 @@ Ordered by `serviceDate` (newest first), then `issuedAt` (newest first), then `i
 
 No body, or `{}`. `waiting` or `called` (today) -> `cancelled`, 200. Already cancelled:
 200 unchanged. `served`, or a ticket for an earlier day: 409 `QUEUE_TICKET_NOT_LEAVABLE`.
+
+## Prescriptions (private, patient scope, read-only)
+
+The signed-in patient's own prescriptions. Responses are `Cache-Control: no-store`.
+Nothing in this API creates, edits, signs, dispenses, renews or changes the status of a
+prescription: there is no prescriber workflow yet. See
+[conventions.md](conventions.md#prescriptions-permission-model).
+
+Prescription object (list):
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `id` | uuid | |
+| `status` | `active` \| `completed` \| `cancelled` \| `expired` | stored value; not recomputed from `expiresOn` |
+| `issuedOn` | date `YYYY-MM-DD` | |
+| `expiresOn` | date \| null | on or after `issuedOn` |
+| `notes` | string \| null, max 1000 | |
+| `practitioner` | `{ fullName, specialty }` \| null | display only; no id, licence number or login link |
+| `facility` | `{ id, name }` \| null | |
+| `itemCount` | integer | number of items |
+| `createdAt`, `updatedAt` | date-time | UTC |
+
+The detail response adds `items`: `{ id, medicineName, dosage, quantity (integer \| null),
+instructions (string \| null), refills }`, in the order they were added. `patientId` and
+the appointment link are never returned.
+
+### `GET /api/prescriptions`
+
+| Query | Type | Rules |
+| --- | --- | --- |
+| `page`, `pageSize` | integer | default 1 / 20; max 1000 / 100 |
+| `status` | prescription status | exact |
+| `from` | date `YYYY-MM-DD` | `issuedOn >= from`; not before 1900-01-01 |
+| `to` | date `YYYY-MM-DD` | `issuedOn <= to`; not before `from` |
+
+Ordered by `issuedOn` (newest first), then `createdAt` (newest first), then `id`. Unknown
+or repeated parameters (including `patientId`) are a 400. Uses the
+`prescriptions(patient_id, issued_on)` index.
+
+### `GET /api/prescriptions/{id}`
+
+`200 { "data": <prescription with items> }`. Another patient's prescription is the same
+404 `PRESCRIPTION_NOT_FOUND` as a missing one. Items are only read through the owned
+prescription (there is no separate items route). An invalid id or any query parameter is
+a 400.
 
 ## Manual live checks
 

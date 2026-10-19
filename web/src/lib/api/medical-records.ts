@@ -28,14 +28,14 @@ export function todayInJohannesburg(now: Date = new Date()): string {
 }
 
 /** YYYY-MM-DD (a real calendar date) -> Date at UTC midnight, as Prisma expects for @db.Date. */
-const calendarDate = (label: string) =>
+export const calendarDate = (label: string) =>
   z.iso
     .date({ error: `${label} must be a date in the format YYYY-MM-DD.` })
     .refine((value) => value >= EARLIEST_RECORD_DATE, {
       message: `${label} must be on or after ${EARLIEST_RECORD_DATE}.`,
     });
 
-const toUtcMidnight = (value: string) => new Date(`${value}T00:00:00.000Z`);
+export const toUtcMidnight = (value: string) => new Date(`${value}T00:00:00.000Z`);
 
 const text = (label: string, max: number) =>
   z

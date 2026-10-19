@@ -103,8 +103,10 @@ The schema in `web/prisma/schema.prisma` targets PostgreSQL (planned host: Supab
 | `appointments` | A patient's appointments (practitioner/facility names are copied so history survives deletes) |
 | `medical_records` | A patient's medical records |
 | `queue_tickets` | Virtual queue tickets per facility per day (ticket numbers are unique per facility and date) |
+| `prescriptions` | A patient's prescriptions (status `active`, `completed`, `cancelled` or `expired`), optionally linked to a practitioner, appointment and facility |
+| `prescription_items` | The medicines on a prescription (name, dosage, quantity, instructions, refills) |
 
-Deleting a profile deletes the patient's settings, emergency profile, appointments, records and queue tickets. Deleting a practitioner or facility keeps appointments (the link is set to null); a facility that still has queue tickets cannot be deleted.
+Deleting a profile deletes the patient's settings, emergency profile, appointments, records, queue tickets and prescriptions (with their items). Deleting a practitioner or facility keeps appointments and prescriptions (the link is set to null; deleting an appointment also just unlinks its prescriptions); a facility that still has queue tickets cannot be deleted.
 
 **Environment.** Copy `web/.env.example` to `web/.env` (git-ignored) and fill in your own values. Never commit real keys.
 
@@ -118,6 +120,7 @@ Deleting a profile deletes the patient's settings, emergency profile, appointmen
    - Everywhere (plain PostgreSQL too): enables Row Level Security on every table, including Prisma's `_prisma_migrations`; adds CHECK constraints (ticket number > 0, estimated wait >= 0, latitude -90 to 90, longitude -180 to 180); and adds a trigger that sets `updated_at` on every update.
    - On Supabase only: triggers on `auth.users` create the profile, settings and emergency profile on signup (role always `patient`), copy email changes to `profiles.email`, and delete the profile when the auth user is deleted. Existing auth users get any missing rows backfilled. Column-level grants and RLS policies for the Supabase Data API let patients read their own data, change only their profile name and phone, edit (not delete) their emergency profile and settings, add, edit and delete their own medical records, and only *read* their own appointments and queue tickets. `id`, `created_at` and `updated_at` are always set by the database. Anyone can read facilities and the practitioner directory (`id`, `full_name`, `specialty`, `facility_id`; `profile_id` and `license_number` stay private). `_prisma_migrations` is closed to the Data API.
    - On plain PostgreSQL (CI, Prisma's shadow database) the Supabase-only part is skipped with a notice.
+3. `20261019203000_prescriptions`: additive. Creates `prescriptions` and `prescription_items` (Prisma-generated DDL) plus, by hand: RLS on both tables, CHECKs (`expires_on >= issued_on`, quantity > 0, refills >= 0) and the `updated_at` triggers. On Supabase, `anon` gets nothing and `authenticated` gets SELECT only: patients read their own prescriptions and the items of their own prescriptions. There is no write grant or policy for anyone (no verified prescriber model yet), so prescriptions can only be written by the database owner for now.
 
 ```bash
 npm run db:validate        # check the schema (needs DATABASE_URL/DIRECT_URL set, any value)

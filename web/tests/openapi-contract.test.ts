@@ -159,4 +159,12 @@ describe("OpenAPI contract (static)", () => {
       }
     }
   });
+
+  it("documented response schemas never expose restricted fields", () => {
+    const restricted = ["patientId", "licenseNumber", "profileId"];
+    const schemas = (spec.components?.schemas ?? {}) as Record<string, { properties?: Record<string, unknown> }>;
+    for (const [name, schema] of Object.entries(schemas)) {
+      for (const field of restricted) expect(schema.properties ?? {}, `${name}.${field}`).not.toHaveProperty(field);
+    }
+  });
 });

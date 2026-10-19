@@ -51,6 +51,7 @@ Error (never with a 2xx status):
 | 404 | `PRACTITIONER_NOT_FOUND` | No practitioner with that id |
 | 404 | `APPOINTMENT_NOT_FOUND` | No appointment with that id **for you** (another patient's looks the same) |
 | 404 | `MEDICAL_RECORD_NOT_FOUND` | No medical record with that id **for you** (another patient's looks the same) |
+| 404 | `PRESCRIPTION_NOT_FOUND` | No prescription with that id **for you** (another patient's looks the same) |
 | 404 | `QUEUE_TICKET_NOT_FOUND` | No queue ticket with that id **for you** (another patient's looks the same) |
 | 404 | `NOT_FOUND` | Generic missing record |
 | 409 | `CONFLICT` | Unique-constraint conflict |
@@ -72,7 +73,7 @@ backfill.
 ## Authentication
 
 **Private endpoints** (`/api/profile`, `/api/settings`, `/api/appointments*`, `/api/medical-records*`,
-`/api/queues*`, `/api/queue-tickets*`) make exactly one Supabase Auth
+`/api/queues*`, `/api/queue-tickets*`, `/api/prescriptions*`) make exactly one Supabase Auth
 `getUser` call per request, which verifies the user with the Auth server (so revoked
 or deleted sessions are rejected).
 
@@ -101,7 +102,8 @@ the rules are enforced **in code**:
 
 - **Private data:** every query's `where` uses the verified session user id
   (`profiles.id`, `user_settings.user_id`, `appointments.patient_id`,
-  `medical_records.patient_id`, `queue_tickets.patient_id`), never a value
+  `medical_records.patient_id`, `queue_tickets.patient_id`,
+  `prescriptions.patient_id`), never a value
   from the request. Strict schemas reject any field that isn't explicitly editable.
   Appointment and medical-record lookups filter on id AND patient, so another
   patient's row is a 404, not a 403 (ids can't be probed). Medical records are
@@ -247,3 +249,19 @@ so concurrent requests are checked one at a time. Limits:
     database constraint, so direct database writes (SQL editor, scripts) could bypass
     it. A partial unique index would close that gap (see the M5 report); none is
     applied.
+
+## Prescriptions: permission model
+
+- Tables `prescriptions` and `prescription_items` (migration `20261019203000_prescriptions`).
+  Statuses: `active` (default), `completed`, `cancelled`, `expired`. The stored status is
+  returned as-is; nothing recomputes it from `expires_on`.
+- **Patients: read-only.** The API returns only the caller's prescriptions; items are
+  read only through an owned prescription. RLS matches this for the Data API (SELECT own
+  prescriptions; items via an EXISTS on the owned parent); `anon` has no access.
+- **No writes for anyone through the API or the Data API.** There is no verified
+  prescriber model (a practitioner's login link and licence are not verified by any
+  workflow), so there is no create, edit, sign, dispense, renew or status-change endpoint
+  and no clinician write policy. Prescriptions can only be written by the database owner
+  for now.
+- Practitioner details are limited to `fullName` and `specialty`; `profile_id` and
+  `license_number` are never returned. The appointment link is not returned.

@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MedLink SA API
-  version: 0.5.0
+  version: 0.6.0
   summary: JSON API served by the MedLink SA Next.js app (web/src/app/api).
   description: |
     Documents only the endpoints that are implemented. Conventions (envelope,
@@ -29,6 +29,11 @@ tags:
       Africa/Johannesburg); there is no separate queue object. Patients can join, see
       and leave their own tickets. Calling, serving and reordering tickets are staff
       operations and are not available. No wait-time estimates are provided.
+  - name: Prescriptions
+    description: |
+      The signed-in patient's own prescriptions, read-only. Prescriptions are written by
+      prescribers; there is no prescriber workflow in this API yet, so nothing here
+      creates, edits, signs, dispenses, renews or changes the status of a prescription.
   - name: MedicalRecords
     description: |
       The signed-in patient's own medical records. Records are patient-authored (the
@@ -841,6 +846,97 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/ServiceUnavailable" }
 
+  /api/prescriptions:
+    get:
+      tags: [Prescriptions]
+      operationId: listPrescriptions
+      summary: List my prescriptions
+      description: |
+        Only the caller's prescriptions, without items (see `itemCount`; items are in the
+        detail response). Ordered by issuedOn (newest first), then createdAt (newest
+        first), then id. `from` and `to` filter issuedOn and are inclusive. Unknown or
+        repeated query parameters (including `patientId`) are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/PageSize"
+        - name: status
+          in: query
+          schema: { $ref: "#/components/schemas/PrescriptionStatus" }
+        - name: from
+          in: query
+          description: Earliest issuedOn (inclusive), `YYYY-MM-DD`, not before 1900-01-01.
+          schema: { type: string, format: date }
+        - name: to
+          in: query
+          description: Latest issuedOn (inclusive), `YYYY-MM-DD`. Must not be before `from`.
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: One page of the caller's prescriptions.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data, meta]
+                properties:
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/PrescriptionSummary" }
+                  meta: { $ref: "#/components/schemas/PageMeta" }
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
+  /api/prescriptions/{id}:
+    get:
+      tags: [Prescriptions]
+      operationId: getPrescription
+      summary: Get one of my prescriptions, with its items
+      description: Another patient's prescription returns the same 404 as a missing one. Query parameters are a 400.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "200":
+          description: The prescription and its items.
+          headers:
+            x-request-id: { $ref: "#/components/headers/RequestId" }
+            Cache-Control: { $ref: "#/components/headers/NoStore" }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [data]
+                properties:
+                  data: { $ref: "#/components/schemas/Prescription" }
+              example:
+                data:
+                  id: b1b1b1b1-c2c2-4d3d-8e4e-f5f5f5f5f5f5
+                  status: active
+                  issuedOn: "2026-10-19"
+                  expiresOn: "2027-04-19"
+                  notes: Take with food
+                  practitioner: { fullName: Dr Sipho Dlamini, specialty: General practice }
+                  facility: { id: 3f2b8c1e-7d4a-4e5b-9c6d-1a2b3c4d5e6f, name: Rosebank Clinic }
+                  itemCount: 1
+                  createdAt: "2026-10-19T08:00:00.000Z"
+                  updatedAt: "2026-10-19T08:00:00.000Z"
+                  items:
+                    - id: c1c1c1c1-d2d2-4e3e-8f4f-a5a5a5a5a5a5
+                      medicineName: Metformin 850mg
+                      dosage: 1 tablet twice daily
+                      quantity: 60
+                      instructions: null
+                      refills: 2
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "500": { $ref: "#/components/responses/InternalError" }
+        "503": { $ref: "#/components/responses/ServiceUnavailable" }
+
 components:
   securitySchemes:
     cookieSession:
@@ -974,6 +1070,58 @@ components:
       type: object
       additionalProperties: false
       description: No fields are accepted. The body may also be omitted.
+    PrescriptionStatus:
+      type: string
+      enum: [active, completed, cancelled, expired]
+      description: |
+        Stored status. New prescriptions are `active`; `completed`, `cancelled` and
+        `expired` are terminal. It is not recomputed from `expiresOn`, and this API never
+        changes it.
+    PrescriptionSummary:
+      type: object
+      required: [id, status, issuedOn, expiresOn, notes, practitioner, facility, itemCount, createdAt, updatedAt]
+      properties:
+        id: { type: string, format: uuid }
+        status: { $ref: "#/components/schemas/PrescriptionStatus" }
+        issuedOn: { type: string, format: date }
+        expiresOn: { type: [string, "null"], format: date, description: On or after issuedOn. }
+        notes: { type: [string, "null"], maxLength: 1000 }
+        practitioner:
+          type: [object, "null"]
+          description: Display only. null if no practitioner is linked or it was removed.
+          required: [fullName, specialty]
+          properties:
+            fullName: { type: string, maxLength: 100 }
+            specialty: { type: string, maxLength: 100 }
+        facility:
+          type: [object, "null"]
+          required: [id, name]
+          properties:
+            id: { type: string, format: uuid }
+            name: { type: string, maxLength: 150 }
+        itemCount: { type: integer, minimum: 0 }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+    PrescriptionItem:
+      type: object
+      required: [id, medicineName, dosage, quantity, instructions, refills]
+      properties:
+        id: { type: string, format: uuid }
+        medicineName: { type: string, maxLength: 150 }
+        dosage: { type: string, maxLength: 100 }
+        quantity: { type: [integer, "null"], minimum: 1 }
+        instructions: { type: [string, "null"], maxLength: 500 }
+        refills: { type: integer, minimum: 0 }
+    Prescription:
+      allOf:
+        - $ref: "#/components/schemas/PrescriptionSummary"
+        - type: object
+          required: [items]
+          properties:
+            items:
+              type: array
+              description: In the order they were added.
+              items: { $ref: "#/components/schemas/PrescriptionItem" }
     MedicalRecord:
       type: object
       required: [id, title, category, provider, recordedOn, notes, createdAt, updatedAt]
@@ -1121,6 +1269,7 @@ components:
         - QUEUE_TICKET_NOT_FOUND
         - QUEUE_TICKET_ACTIVE
         - QUEUE_TICKET_NOT_LEAVABLE
+        - PRESCRIPTION_NOT_FOUND
         - UNSUPPORTED_MEDIA_TYPE
         - RATE_LIMITED
         - INTERNAL_ERROR
@@ -1181,7 +1330,7 @@ components:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
     NotFound:
-      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND, PRACTITIONER_NOT_FOUND, APPOINTMENT_NOT_FOUND, MEDICAL_RECORD_NOT_FOUND or QUEUE_TICKET_NOT_FOUND.
+      description: PROFILE_NOT_FOUND, SETTINGS_NOT_FOUND, FACILITY_NOT_FOUND, PRACTITIONER_NOT_FOUND, APPOINTMENT_NOT_FOUND, MEDICAL_RECORD_NOT_FOUND, QUEUE_TICKET_NOT_FOUND or PRESCRIPTION_NOT_FOUND.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
