@@ -13,6 +13,7 @@
     "db:migrate:dev": "prisma migrate dev",
     "db:migrate:deploy": "prisma migrate deploy",
     "db:migrate:status": "prisma migrate status",
+    "db:seed:demo": "node --env-file=.env prisma/seed-demo.mjs",
     "db:migrate:diff": "prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script",
     "test": "vitest run"
   },

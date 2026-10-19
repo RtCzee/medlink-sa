@@ -89,7 +89,7 @@ Head to [http://localhost:3000](http://localhost:3000). Create an account on `/s
 
 ### 3. Database (PostgreSQL on Supabase)
 
-The schema in `web/prisma/schema.prisma` targets PostgreSQL on Supabase. The Next.js API reads and writes it through Prisma. The only seeded data is the demo medicine directory (migration 4); facilities and practitioners have no seed yet (see "Known limitations").
+The schema in `web/prisma/schema.prisma` targets PostgreSQL on Supabase. The Next.js API reads and writes it through Prisma. Seeded data: the demo medicine directory (migration 4) and, via `npm run db:seed:demo`, fictional demo facilities and practitioners (see "Demo seed").
 
 **Tables** (all keyed by UUID; `profiles.id` is the Supabase Auth user id):
 
@@ -309,11 +309,30 @@ Android app (Kotlin/Compose)            Website (Next.js pages)
 
 ## Demo data and known limitations
 
-- **No facilities or practitioners are in the database yet**, so booking and queues show their empty states until some are added. Adding them is a database write that needs the project owner's approval (an idempotent seed script is a planned change, not applied).
+- **Demo facilities and practitioners (fictional).** `npm run db:seed:demo` (from `web/`) adds 2 facilities and 3 practitioners, all named `DEMO - …`, with made-up addresses and phone numbers, licence numbers `DEMO-0001` to `DEMO-0003` and no login accounts. They are not real clinics or doctors; never use them for real care. See "Demo seed" below.
 - Medicine prices are demo sample data (`source = 'demo'`, effective 2026-10-19), not current prices, and are labelled as such everywhere.
 - No prescriber, dispensing, pharmacy-order, staff or admin workflows: prescriptions are read-only, there is no API to set appointment status beyond cancel, and queue tickets are never "called" by staff.
 - Telemedicine, messaging, ID verification and vitals are UI demos.
 - No deployed URL is configured in this repository. The Android app needs a reachable HTTPS base URL (or `http://10.0.2.2:3000` for the emulator against `npm run dev`; debug builds allow cleartext). Supabase Auth redirect URLs must include the deployed site's `/auth/confirm` for email confirmation.
+
+### Demo seed
+
+`web/prisma/seed-demo.mjs`, run with `npm run db:seed:demo` from `web/` (reads `web/.env`).
+
+- **Safe to re-run:** fixed UUIDs, `createMany` with `skipDuplicates`. It only inserts missing demo rows and never updates or deletes anything, so other rows are untouched. A second run prints `inserted 0 facilities and 0 practitioners`.
+- **Target guard:** it refuses to run unless `DATABASE_URL` points at the MedLink-SA Supabase project (ref `rjcuiadcsvlxfbplcihl`, pooler user `postgres.<ref>` or host `db.<ref>.supabase.co`), and never prints the URL.
+- **What it creates:**
+
+| Id | Row | Links |
+| --- | --- | --- |
+| `0d3e0000-0000-4000-8000-00000000f001` | Facility `DEMO - Soweto Community Clinic` (clinic, Soweto, Gauteng) | |
+| `0d3e0000-0000-4000-8000-00000000f002` | Facility `DEMO - Johannesburg Family Practice` (clinic, Johannesburg, Gauteng) | |
+| `0d3e0000-0000-4000-8000-00000000a001` | Practitioner `DEMO - Dr Thandi Mokoena`, General Practitioner, `DEMO-0001` | Soweto clinic |
+| `0d3e0000-0000-4000-8000-00000000a002` | Practitioner `DEMO - Dr Pieter Naidoo`, Family Medicine, `DEMO-0002` | Johannesburg practice |
+| `0d3e0000-0000-4000-8000-00000000a003` | Practitioner `DEMO - Dr Lerato Dube`, Paediatrics, `DEMO-0003` | Soweto clinic |
+
+- **Verify through the API** (with `npm run dev` running): `GET /api/facilities`, `GET /api/facilities/0d3e0000-0000-4000-8000-00000000f001`, `GET /api/practitioners?facilityId=0d3e0000-0000-4000-8000-00000000f001`. Every practitioner is linked to a facility, so it can be booked; signed-in patients see both facilities under `GET /api/queues`. Licence numbers are never returned by the API.
+- To remove the demo rows later, delete those five ids by hand (the script never deletes).
 
 ## How to demo
 
