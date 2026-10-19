@@ -1,0 +1,8 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!-- Debug builds only: allow plain HTTP so an emulator/phone can reach a local
+         `npm run dev` server (e.g. http://10.0.2.2:3000). Release builds stay HTTPS-only. -->
+    <application
+        android:usesCleartextTraffic="true"
+        tools:ignore="UnusedAttribute" />
+</manifest>

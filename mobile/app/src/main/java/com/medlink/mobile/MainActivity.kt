@@ -169,7 +169,7 @@ private fun MedLinkApp() {
                     containerColor = Canvas,
                     bottomBar = {
                         NavigationBar(containerColor = Color.White) {
-                            val tabs = listOf("Home", "Queue", "Emergency", "Care", "Records", "Profile")
+                            val tabs = listOf("Home", "Online", "Emergency", "Care", "Records", "Profile")
                             val icons = listOf(
                                 Icons.Default.Home,
                                 Icons.Default.Queue,
@@ -201,7 +201,7 @@ private fun MedLinkApp() {
                                 appointments.firstOrNull { it.scheduledAtMillis >= System.currentTimeMillis() },
                                 onNavigate = { selectedTab = it },
                             )
-                            1 -> QueueScreen(onMessage = { message = it })
+                            1 -> OnlineScreen(onLocalDemo = { QueueScreen(onMessage = { message = it }) })
                             2 -> EmergencyScreen(account, emergencyPage) { emergencyPage = it }
                             3 -> CareScreen(
                                 account.email,
