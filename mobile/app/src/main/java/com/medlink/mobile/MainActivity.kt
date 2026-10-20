@@ -168,8 +168,8 @@ private fun MedLinkApp() {
                 Scaffold(
                     containerColor = Canvas,
                     bottomBar = {
-                        NavigationBar(containerColor = Color.White) {
-                            val tabs = listOf("Home", "Online", "Emergency", "Care", "Records", "Profile")
+                        NavigationBar(containerColor = Color.White, tonalElevation = 4.dp) {
+                            val tabs = listOf("Home", "Online", "SOS", "Care", "Records", "You")
                             val icons = listOf(
                                 Icons.Default.Home,
                                 Icons.Default.Queue,
@@ -183,7 +183,7 @@ private fun MedLinkApp() {
                                     selected = selectedTab == index,
                                     onClick = { selectedTab = index },
                                     icon = { Icon(icons[index], contentDescription = label) },
-                                    label = { Text(label, fontSize = 10.sp) },
+                                    label = { Text(label, fontSize = 9.sp, fontWeight = if (selectedTab == index) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1) },
                                 )
                             }
                         }
@@ -1337,7 +1337,7 @@ private fun ScreenTitle(title: String, subtitle: String) {
         Image(
             painter = painterResource(R.drawable.medlink_logo),
             contentDescription = "MedLink logo",
-            modifier = Modifier.size(width = 18.dp, height = 24.dp),
+            modifier = Modifier.size(width = 34.dp, height = 44.dp),
             contentScale = ContentScale.Fit,
         )
         Spacer(Modifier.width(6.dp))

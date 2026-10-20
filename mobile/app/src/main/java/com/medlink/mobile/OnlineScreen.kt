@@ -2,6 +2,7 @@ package com.medlink.mobile
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -10,6 +11,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -34,6 +36,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -105,7 +109,16 @@ internal fun OnlineScreen(onLocalDemo: @Composable () -> Unit) {
 
     Column(Modifier.padding(horizontal = 20.dp)) {
         Spacer(Modifier.height(22.dp))
-        Text("MEDLINK  /  ONLINE", color = OTeal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Image(
+                painter = painterResource(R.drawable.medlink_logo),
+                contentDescription = "MedLink logo",
+                modifier = Modifier.size(width = 34.dp, height = 44.dp),
+                contentScale = ContentScale.Fit,
+            )
+            Spacer(Modifier.width(8.dp))
+            Text("MEDLINK  /  ONLINE", color = OTeal, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.2.sp)
+        }
         Spacer(Modifier.height(7.dp))
         Text("Online services", fontSize = 27.sp, fontWeight = FontWeight.Bold, color = OInk)
         Spacer(Modifier.height(5.dp))
