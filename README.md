@@ -2,6 +2,8 @@
 
 A digital health platform built for South Africa — connecting patients, doctors, pharmacies, hospitals, and administrators in one place.
 
+[Click here for the demo video](./assets/demo-video.mp4)
+
 ## Tech Stack
 
 | Layer | What we use |
